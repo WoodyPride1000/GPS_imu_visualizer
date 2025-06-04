@@ -1,0 +1,4 @@
+Flask==2.3.3
+pyserial==3.5
+pynmea2==1.19.0
+mpu6050-raspberrypi==1.0.1

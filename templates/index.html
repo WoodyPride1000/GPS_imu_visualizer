@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>GPS可視化</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <div class="info-box overlay-box">
+        <div>座標系: <span id="coord_system">緯度経度</span></div>
+        <div>X: <span id="x_coord">--</span></div>
+        <div>Y: <span id="y_coord">--</span></div>
+        <div>方位角: <span id="heading">--</span>°</div>
+        <div>基線長: <span id="distance">--</span> m</div>
+        <div>基線誤差: <span id="error">--</span> m</div>
+        <div>IMU使用: <span id="imu">--</span></div>
+        <div>IMU Z軸角速度: <span id="imu_raw_gyro_z">--</span> °/s</div>
+        <div>HDOP（基準局）: <span id="hdop_base">--</span></div>
+        <div>HDOP（移動局）: <span id="hdop_rover">--</span></div>
+        <div id="status-message"></div>
+    </div>
+
+    <div class="control-box overlay-box">
+        <label>
+            <input type="checkbox" id="followMapCheckbox" checked aria-label="地図追従を有効にする">
+            地図追従
+        </label>
+        <label>
+            <input type="checkbox" id="gridCheckbox" checked aria-label="グリッド線を表示する">
+            グリッド線表示
+        </label>
+        <label for="coordSystemSelect">座標系:</label>
+        <select id="coordSystemSelect" aria-label="座標系の選択">
+            <option value="wgs84">緯度経度</option>
+            <option value="utm">UTM</option>
+            <option value="jgd2011">平面直角座標</option>
+        </select>
+    </div>
+
+    <div class="slider-box overlay-box">
+        <label for="fanSlider">角度幅: <span id="fanValue">45</span>°</label><br>
+        <input type="range" id="fanSlider" min="0" max="90" value="45" aria-label="扇形の角度を調整">
+    </div>
+
+    <div id="map"></div>
+
+    <script src="/static/proj4.js"></script>
+    <script src="/static/leaflet/leaflet.js"></script>
+    <script>
+        // proj4 定義
+        proj4.defs('EPSG:6677', '+proj=tmerc +lat_0=36 +lon_0=139.8333333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs');
+
+        // カスタムグリッドレイヤー
+        L.GridLayer.CustomGrid = L.GridLayer.extend({
+            createTile: function(coords) {
+                const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+                const ctx = tile.getContext('2d');
+                const size = this.getTileSize();
+                tile.width = size.x;
+                tile.height = size.y;
+
+                // ズームレベルに応じたグリッド間隔
+                const zoom = coords.z;
+                const gridSpacing = zoom >= 18 ? 0.0001 : zoom >= 16 ? 0.001 : 0.01;
+
+                // タイルの地理座標範囲
+                const nw = this._map.unproject([coords.x * size.x, coords.y * size.y], zoom);
+                const se = this._map.unproject([(coords.x + 1) * size.x, (coords.y + 1) * size.y], zoom);
+
+                ctx.strokeStyle = 'rgba(0, 0, 255, 0.5)';
+                ctx.lineWidth = 1;
+
+                // 縦線（経度）
+                let lon = Math.floor(nw.lng / gridSpacing) * gridSpacing;
+                while (lon <= se.lng) {
+                    const start = this._map.project([nw.lat, lon], zoom).subtract([coords.x * size.x, coords.y * size.y]);
+                    const end = this._map.project([se.lat, lon], zoom).subtract([coords.x * size.x, coords.y * size.y]);
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.lineTo(end.x, end.y);
+                    ctx.stroke();
+                    lon += gridSpacing;
+                }
+
+                // 横線（緯度）
+                let lat = Math.floor(se.lat / gridSpacing) * gridSpacing;
+                while (lat <= nw.lat) {
+                    const start = this._map.project([lat, nw.lng], zoom).subtract([coords.x * size.x, coords.y * size.y]);
+                    const end = this._map.project([lat, se.lng], zoom).subtract([coords.x * size.x, coords.y * size.y]);
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.lineTo(end.x, end.y);
+                    ctx.stroke();
+                    lat += gridSpacing;
+                }
+
+                return tile;
+            }
+        });
+
+        L.gridLayer.customGrid = function() {
+            return new L.GridLayer.CustomGrid();
+        };
+
+        const state = {
+            map: L.map('map', { zoomControl: false, center: [35.681236, 139.767125], zoom: 18 }),
+            baseMarker: L.circleMarker([0, 0], { radius: 6, color: 'blue' }),
+            headingLine: L.polyline([[0, 0], [0, 0]], { color: 'red', weight: 2 }),
+            fanShape: L.polygon([[0, 0]], { color: 'green', fillColor: 'green', fillOpacity: 0.3, weight: 1 }),
+            gridLayer: L.gridLayer.customGrid(),
+            fanAngle: 45,
+            lastKnownHeading: 0.0,
+            lastLat: 0.0,
+            lastLon: 0.0,
+            lastImuGyroZ: 0.0,
+            lastUpdateTime: Date.now(),
+            initialViewSet: false,
+            isFollowingMap: true,
+            errorCount: 0,
+            coordSystem: 'wgs84'
+        };
+
+        state.baseMarker.addTo(state.map);
+        state.headingLine.addTo(state.map);
+        state.fanShape.addTo(state.map);
+        state.gridLayer.addTo(state.map);
+        L.control.zoom({ position: 'bottomright' }).addTo(state.map);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(state.map);
+
+        const HEADING_LINE_SCREEN_RATIO = 0.40;
+        const FAN_SHAPE_SCREEN_RATIO = 0.30;
+        const API_FETCH_INTERVAL = 500;
+        const MAX_ERROR_COUNT = 3;
+        const HDOP_THRESHOLD = 2.0;
+
+        // イベントリスナー
+        document.getElementById("fanSlider").addEventListener("input", () => {
+            state.fanAngle = parseInt(document.getElementById("fanSlider").value);
+            document.getElementById("fanValue").textContent = state.fanAngle;
+            updateGeometrySizes();
+        });
+
+        document.getElementById("followMapCheckbox").addEventListener('change', function() {
+            state.isFollowingMap = this.checked;
+            if (state.isFollowingMap && state.baseMarker.getLatLng().lat !== 0.0) {
+                state.map.setView(state.baseMarker.getLatLng(), state.map.getZoom());
+            }
+        });
+
+        document.getElementById("gridCheckbox").addEventListener('change', function() {
+            if (this.checked) {
+                state.gridLayer.addTo(state.map);
+            } else {
+                state.map.removeLayer(state.gridLayer);
+            }
+        });
+
+        document.getElementById("coordSystemSelect").addEventListener('change', function() {
+            state.coordSystem = this.value;
+            document.getElementById("coord_system").textContent = {
+                wgs84: '緯度経度',
+                utm: 'UTM',
+                jgd2011: '平面直角座標'
+            }[state.coordSystem];
+            updateCoordinatesDisplay(state.lastLat, state.lastLon);
+        });
+
+        state.map.on('movestart', () => {
+            if (state.isFollowingMap) {
+                document.getElementById("followMapCheckbox").checked = false;
+                state.isFollowingMap = false;
+            }
+        });
+
+        state.map.on('zoomstart', () => {
+            if (state.isFollowingMap) {
+                document.getElementById("followMapCheckbox").checked = false;
+                state.isFollowingMap = false;
+            }
+        });
+
+        window.addEventListener('resize', updateGeometrySizes);
+
+        function updateCoordinatesDisplay(lat, lon) {
+            const xCoordElement = document.getElementById("x_coord");
+            const yCoordElement = document.getElementById("y_coord");
+            if (lat === 0.0 && lon === 0.0) {
+                xCoordElement.textContent = "--";
+                yCoordElement.textContent = "--";
+                return;
+            }
+            if (state.coordSystem === 'wgs84') {
+                xCoordElement.textContent = lat.toFixed(6);
+                yCoordElement.textContent = lon.toFixed(6);
+            } else if (state.coordSystem === 'utm') {
+                const utm = proj4('EPSG:4326', 'EPSG:32654', [lon, lat]); // UTM Zone 54N (東京)
+                xCoordElement.textContent = utm[0].toFixed(2) + ' m';
+                yCoordElement.textContent = utm[1].toFixed(2) + ' m';
+            } else if (state.coordSystem === 'jgd2011') {
+                const jgd = proj4('EPSG:4326', 'EPSG:6677', [lon, lat]); // JGD2011 Zone IX
+                xCoordElement.textContent = jgd[0].toFixed(2) + ' m';
+                yCoordElement.textContent = jgd[1].toFixed(2) + ' m';
+            }
+        }
+
+        function calculateDistanceForPixels(targetPixels) {
+            const centerPoint = state.map.latLngToLayerPoint(state.map.getCenter());
+            const targetPoint = L.point(centerPoint.x, centerPoint.y - targetPixels);
+            const targetLatLng = state.map.layerPointToLatLng(targetPoint);
+            return state.map.distance(state.map.getCenter(), targetLatLng);
+        }
+
+        function updateGeometrySizes() {
+            const mapContainerHeight = state.map.getSize().y;
+            const targetHeadingLinePixels = mapContainerHeight * HEADING_LINE_SCREEN_RATIO;
+            const targetFanShapePixels = mapContainerHeight * FAN_SHAPE_SCREEN_RATIO;
+            window.headingLineLength = calculateDistanceForPixels(targetHeadingLinePixels);
+            window.fanShapeRadius = calculateDistanceForPixels(targetFanShapePixels);
+            redrawMapElements();
+        }
+
+        function redrawMapElements() {
+            const lat = state.baseMarker.getLatLng().lat;
+            const lon = state.baseMarker.getLatLng().lng;
+            const currentHeading = state.lastKnownHeading;
+
+            if (lat === state.lastLat && lon === state.lastLon && currentHeading === state.lastKnownHeading) return;
+            state.lastLat = lat;
+            state.lastLon = lon;
+            state.lastHeading = currentHeading;
+
+            if (lat === 0.0 && lon === 0.0) {
+                state.headingLine.setLatLngs([[0, 0], [0, 0]]);
+                state.fanShape.setLatLngs([[0, 0]]);
+                return;
+            }
+
+            const safeHeadingLineLength = isNaN(window.headingLineLength) || window.headingLineLength === 0 ? 400 : window.headingLineLength;
+            const safeFanShapeRadius = isNaN(window.fanShapeRadius) || window.fanShapeRadius === 0 ? 300 : window.fanShapeRadius;
+            const R = 6378137;
+            const bearingRad = currentHeading * Math.PI / 180;
+            const lat1 = lat * Math.PI / 180;
+            const lon1 = lon * Math.PI / 180;
+
+            // 方位線
+            const lineLat2 = Math.asin(Math.sin(lat1) * Math.cos(safeHeadingLineLength / R) +
+                Math.cos(lat1) * Math.sin(safeHeadingLineLength / R) * Math.cos(bearingRad));
+            const lineLon2 = lon1 + Math.atan2(Math.sin(bearingRad) * Math.sin(safeHeadingLineLength / R) * Math.cos(lat1),
+                Math.cos(safeHeadingLineLength / R) - Math.sin(lat1) * Math.sin(lineLat2));
+            state.headingLine.setLatLngs([[lat, lon], [lineLat2 * 180 / Math.PI, lineLon2 * 180 / Math.PI]]);
+
+            // 扇形
+            const angleStart = currentHeading - state.fanAngle / 2;
+            const angleEnd = currentHeading + state.fanAngle / 2;
+            const segments = Math.max(10, Math.min(30, Math.floor(state.map.getZoom())));
+            const latlngs = [[lat, lon]];
+            for (let i = 0; i <= segments; i++) {
+                const angle = angleStart + (angleEnd - angleStart) * i / segments;
+                const angleRad = angle * Math.PI / 180;
+                const fanLat2 = Math.asin(Math.sin(lat1) * Math.cos(safeFanShapeRadius / R) +
+                    Math.cos(lat1) * Math.sin(safeFanShapeRadius / R) * Math.cos(angleRad));
+                const fanLon2 = lon1 + Math.atan2(Math.sin(angleRad) * Math.sin(safeFanShapeRadius / R) * Math.cos(lat1),
+                    Math.cos(safeFanShapeRadius / R) - Math.sin(lat1) * Math.sin(fanLat2));
+                latlngs.push([fanLat2 * 180 / Math.PI, fanLon2 * 180 / Math.PI]);
+            }
+            latlngs.push([lat, lon]);
+            state.fanShape.setLatLngs(latlngs);
+        }
+
+        function update() {
+            const statusMessageElement = document.getElementById("status-message");
+            statusMessageElement.textContent = "";
+            const currentTime = Date.now();
+            const deltaTime = (currentTime - state.lastUpdateTime) / 1000;
+            state.lastUpdateTime = currentTime;
+
+            fetch('/api/position')
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTPエラー! ステータス: ${res.status}`);
+                    state.errorCount = 0;
+                    return res.json();
+                })
+                .then(data => {
+                    const lat = data.lat;
+                    const lon = data.lon;
+                    const fusedHeading = data.heading;
+                    const imuRawGyroZ = data.imu_raw_gyro_z;
+                    const imuStatus = data.imu;
+                    const error = data.error;
+                    const distance = data.distance;
+                    const hdop_base = data.hdop_base;
+                    const hdop_rover = data.hdop_rover;
+
+                    // UI更新
+                    updateCoordinatesDisplay(lat, lon);
+                    document.getElementById("heading").textContent = fusedHeading.toFixed(1);
+                    document.getElementById("distance").textContent = distance.toFixed(2);
+                    document.getElementById("error").textContent = error.toFixed(2);
+                    document.getElementById("imu").textContent = imuStatus ? "使用中" : "なし";
+                    document.getElementById("imu_raw_gyro_z").textContent = imuRawGyroZ.toFixed(2);
+                    document.getElementById("hdop_base").textContent = hdop_base.toFixed(1);
+                    document.getElementById("hdop_rover").textContent = hdop_rover.toFixed(1);
+                    document.getElementById("hdop_base").style.color = hdop_base > HDOP_THRESHOLD ? 'red' : 'black';
+                    document.getElementById("hdop_rover").style.color = hdop_rover > HDOP_THRESHOLD ? 'red' : 'black';
+
+                    state.baseMarker.setLatLng([lat, lon]);
+                    state.lastKnownHeading = fusedHeading;
+
+                    if (!state.initialViewSet && (lat !== 0.0 || lon !== 0.0)) {
+                        state.map.setView([lat, lon], 18);
+                        state.initialViewSet = true;
+                    } else if (state.isFollowingMap && (lat !== 0.0 || lon !== 0.0)) {
+                        state.map.setView([lat, lon]);
+                    }
+
+                    redrawMapElements();
+                })
+                .catch(error => {
+                    state.errorCount++;
+                    if (state.errorCount >= MAX_ERROR_COUNT) {
+                        statusMessageElement.textContent = `エラー: ${error.message}`;
+                        document.getElementById("x_coord").textContent = "--";
+                        document.getElementById("y_coord").textContent = "--";
+                        document.getElementById("heading").textContent = "--";
+                        document.getElementById("distance").textContent = "--";
+                        document.getElementById("error").textContent = "--";
+                        document.getElementById("imu").textContent = "--";
+                        document.getElementById("imu_raw_gyro_z").textContent = "--";
+                        document.getElementById("hdop_base").textContent = "--";
+                        document.getElementById("hdop_rover").textContent = "--";
+                        state.baseMarker.setLatLng([0, 0]);
+                        state.headingLine.setLatLngs([[0, 0], [0, 0]]);
+                        state.fanShape.setLatLngs([[0, 0]]);
+                    }
+                });
+        }
+
+        updateGeometrySizes();
+        setInterval(update, API_FETCH_INTERVAL);
+    </script>
+</body>
+</html>
+

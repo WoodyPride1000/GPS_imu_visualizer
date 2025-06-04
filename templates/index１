@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <title>GPS可視化</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* 新しいグラフエリアのスタイル */
+        #graph-container {
+            position: absolute;
+            bottom: 20px; /* 必要に応じて調整 */
+            left: 20px; /* 必要に応じて調整 */
+            width: 450px; /* グラフの幅を調整 */
+            height: 250px; /* グラフの高さを調整 */
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            z-index: 1000; /* マップの上に表示 */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        #myChart {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="info-box overlay-box">
+        <div>座標系: <span id="coord_system">緯度経度</span></div>
+        <div>X: <span id="x_coord">--</span></div>
+        <div>Y: <span id="y_coord">--</span></div>
+        <div>方位角: <span id="heading">--</span>°</div>
+        <div>基線長: <span id="distance">--</span> m</div>
+        <div>基線誤差: <span id="error">--</span> m</div>
+        <div>IMU使用: <span id="imu">--</span></div>
+        <div>IMU Z軸角速度: <span id="imu_raw_gyro_z">--</span> °/s</div>
+        <div>HDOP（基準局）: <span id="hdop_base">--</span></div>
+        <div>HDOP（移動局）: <span id="hdop_rover">--</span></div>
+        <div id="status-message"></div>
+    </div>
+
+    <div class="control-box overlay-box">
+        <label>
+            <input type="checkbox" id="followMapCheckbox" checked aria-label="地図追従を有効にする">
+            地図追従
+        </label>
+        <label>
+            <input type="checkbox" id="gridCheckbox" checked aria-label="グリッド線を表示する">
+            グリッド線表示
+        </label>
+        <label for="coordSystemSelect">座標系:</label>
+        <select id="coordSystemSelect" aria-label="座標系の選択">
+            <option value="wgs84">緯度経度</option>
+            <option value="utm">UTM</option>
+            <option value="jgd2011">平面直角座標</option>
+        </select>
+    </div>
+
+    <div class="slider-box overlay-box">
+        <label for="fanSlider">角度幅: <span id="fanValue">45</span>°</label><br>
+        <input type="range" id="fanSlider" min="0" max="90" value="45" aria-label="扇形の角度を調整">
+    </div>
+
+    <div id="graph-container" class="overlay-box">
+        <h3>方位角別データ</h3>
+        <canvas id="myChart"></canvas>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="/static/proj4.js"></script>
+    <script src="/static/leaflet/leaflet.js"></script>
+    <script>
+        // 既存のJavaScriptコードはそのまま
+        // ... (proj4定義、CustomGridLayer定義、stateオブジェクト、イベントリスナーなど)
+
+        // --- グラフ関連の変数と初期化 ---
+        let myChart; // Chart.jsのインスタンスを保持する変数
+
+        function initializeChart() {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            myChart = new Chart(ctx, {
+                type: 'line', // 折れ線グラフ
+                data: {
+                    labels: [], // 横軸（方位角）のデータ
+                    datasets: [{
+                        label: 'シリアルデータ',
+                        data: [], // 縦軸（-20〜-99）のデータ
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false, // コンテナのサイズに合わせて調整
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: '方位角の算出角度 (°)'
+                            },
+                            min: 0, // 方位角は0から360度
+                            max: 360,
+                            ticks: {
+                                stepSize: 45 // 軸の目盛間隔
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'データ値' // 実際のデータの意味に合わせて変更
+                            },
+                            min: -99, // 縦軸の最小値
+                            max: -20  // 縦軸の最大値
+                        }
+                    },
+                    animation: false // リアルタイム更新のためアニメーションを無効に
+                }
+            });
+        }
+
+        // --- グラフデータの更新関数 ---
+        function updateGraphData() {
+            fetch('/api/graph_data')
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTPエラー! ステータス: ${res.status}`);
+                    return res.json();
+                })
+                .then(data => {
+                    myChart.data.labels = data.azimuths;
+                    myChart.data.datasets[0].data = data.values;
+                    myChart.update(); // グラフを更新
+                })
+                .catch(error => {
+                    console.error("グラフデータの取得エラー:", error);
+                });
+        }
+
+        // 既存の `update()` 関数にグラフ更新の呼び出しを追加
+        function update() {
+            // ... 既存のコード ...
+
+            fetch('/api/position')
+                // ... 既存のコード ...
+                .then(data => {
+                    // ... 既存のUI更新とマップ要素の更新 ...
+                    redrawMapElements(); // マップ要素の再描画
+
+                    // グラフデータの更新を呼び出す
+                    updateGraphData();
+                })
+                .catch(error => {
+                    // ... 既存のエラーハンドリング ...
+                });
+        }
+
+        // ページロード時にグラフを初期化
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeChart();
+            updateGeometrySizes();
+            setInterval(update, API_FETCH_INTERVAL);
+        });
+    </script>
+</body>
+</html>

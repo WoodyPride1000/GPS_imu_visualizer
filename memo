@@ -1,0 +1,6 @@
+別のシリアルデータ」の取り扱い: app.pyのcalculate_heading_and_error_thread内でgraph_data_queue.append(...)としている箇所が、グラフのY軸データ源となる部分です。現在、ここはrandom.uniform(-99.0, -20.0)という仮のデータになっています。
+もし「別のシリアルデータ」が、現在のGPS/IMUデータと同じapp.py内で利用可能な場合、そのデータを加工してmapped_graph_y_valueに代入するようにしてください。
+もし「別のシリアルデータ」が全く別のシリアルポートから来る場合、read_gps_threadと同様に新しいスレッド(read_other_serial_threadのようなもの)を作成し、そこでデータを読み込み、SensorDataクラス（または新しいクラス）に保持させ、calculate_heading_and_error_thread内でそのデータをgraph_data_queueに追加するようにします。
+データ点の数: GRAPH_DATA_MAX_POINTS（デフォルト100）は、グラフに表示されるデータ点の最大数です。表示したい履歴の長さに応じて調整してください。
+グラフのスタイル: index.htmlの<style>タグ内にグラフコンテナの基本的なスタイルを追記しました。位置やサイズは適宜調整してください。
+use_reloader=False: app.run(debug=True, use_reloader=False, host="0.0.0.0")とすることで、debug=Trueを維持しつつ、threadingとの競合で問題が発生する可能性のあるリローダーを無効にしています。開発中はこれで問題ありませんが、本番環境ではdebug=Falseに設定することが推奨されます。

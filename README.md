@@ -72,3 +72,21 @@ Leafletの配置: static/leaflet フォルダにLeaflet 1.9.4をダウンロー�
 proj4.js の配置:
 static/proj4.js をプロジェクトにダウンロードして配置してください（例: wget https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.7.5/proj4.js -O static/proj4.js）。
 
+
+## APIエンドポイント一覧
+
+| メソッド | パス                      | 概要                           |
+|:--------:|:--------------------------|:-------------------------------|
+| GET      | /api/data                 | 最新のGPS・IMU・ヘディング情報取得 |
+| GET      | /api/status               | アプリケーションのステータス取得  |
+| POST     | /api/calibration/start    | IMUキャリブレーション開始         |
+| POST     | /api/calibration/stop     | IMUキャリブレーション終了         |
+| POST     | /api/log_level            | ログレベル変更                   |
+
+### 例: ログレベル変更リクエスト
+```json
+POST /api/log_level
+{
+  "level": "INFO"
+}
+

@@ -8,10 +8,12 @@ import random
 import serial
 import pynmea2
 import math
+import ssl # HTTPS化のために追加
 from flask import Flask, jsonify, render_template, request
 from pyproj import Geod
 from typing import Dict, Optional, List
 from collections import deque
+from functools import wraps # 認証デコレータのために追加
 
 # --- グローバルな終了イベント ---
 stop_event = threading.Event()
@@ -75,7 +77,10 @@ if not os.path.exists(config_file_path):
         'DummyAngularSpeed': '0.1', # ダミーモードの角速度 (rad/s)
         'DummyRadiusM': '10.0', # ダミーモードの円形移動半径 (m)
         'LogLevel': 'INFO',
-        'CalculationInterval': '0.1' # 計算スレッドの待機間隔
+        'CalculationInterval': '0.1', # 計算スレッドの待機間隔
+        'APIKey': 'YOUR_SECURE_API_KEY_HERE', # APIキーを追加
+        'CertPath': 'cert.pem', # HTTPS証明書パスを追加
+        'KeyPath': 'key.pem' # HTTPS秘密鍵パスを追加
     }
     with open(config_file_path, 'w') as f:
         config.write(f)
@@ -99,17 +104,21 @@ try:
     GPS_MAX_RETRY_COUNT = config.getint('GPS', 'MaxRetryCount', fallback=10)
     IMU_MAX_RETRY_COUNT = config.getint('IMU', 'MaxRetryCount', fallback=5)
     IMU_GYRO_BUFFER_SIZE = config.getint('IMU', 'GyroBufferSize', fallback=10)
-    IMU_GYRO_OUTLIER_THRESHOLD = config.getfloat('IMU', 'GyroOutlierThreshold', fallback=3.0) # 新しく追加
+    IMU_GYRO_OUTLIER_THRESHOLD = config.getfloat('IMU', 'GyroOutlierThreshold', fallback=3.0)
 
     DUMMY_MODE = config.getboolean('General', 'DummyMode')
     DUMMY_SCENARIO = config.get('General', 'DummyScenario', fallback='linear')
-    DUMMY_SPEED_MPS = config.getfloat('General', 'DummySpeedMps', fallback=0.5) # 新しく追加
-    DUMMY_ANGULAR_SPEED = config.getfloat('General', 'DummyAngularSpeed', fallback=0.1) # 新しく追加
-    DUMMY_RADIUS_M = config.getfloat('General', 'DummyRadiusM', fallback=10.0) # 新しく追加
+    DUMMY_SPEED_MPS = config.getfloat('General', 'DummySpeedMps', fallback=0.5)
+    DUMMY_ANGULAR_SPEED = config.getfloat('General', 'DummyAngularSpeed', fallback=0.1)
+    DUMMY_RADIUS_M = config.getfloat('General', 'DummyRadiusM', fallback=10.0)
 
     IMU_GYRO_Z_THRESHOLD = config.getfloat('IMU', 'GyroZThreshold')
     IMU_GPS_FUSION_ALPHA = config.getfloat('FUSION', 'ImuGpsFusionAlpha')
     CALCULATION_INTERVAL = config.getfloat('General', 'CalculationInterval', fallback=0.1)
+    
+    API_KEY = config.get('General', 'APIKey', fallback='YOUR_SECURE_API_KEY_HERE') # APIキー
+    CERT_PATH = config.get('General', 'CertPath', fallback='cert.pem') # 証明書パス
+    KEY_PATH = config.get('General', 'KeyPath', fallback='key.pem') # 秘密鍵パス
 
     log_level_str = config.get('General', 'LogLevel', fallback='INFO').upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
@@ -128,19 +137,36 @@ try:
         raise ValueError(f"CalculationIntervalが妥当な範囲ではありません: {CALCULATION_INTERVAL}")
     if not (0.0 <= IMU_GYRO_OUTLIER_THRESHOLD <= 10.0):
         raise ValueError(f"IMU_GYRO_OUTLIER_THRESHOLDが妥当な範囲ではありません: {IMU_GYRO_OUTLIER_THRESHOLD}")
+    
+    if API_KEY == 'YOUR_SECURE_API_KEY_HERE':
+        logger.warning("config.iniのAPIKeyがデフォルト値のままです。本番環境では必ず変更してください。")
 
-except (configparser.Error, ValueError) as e:
-    if isinstance(e, ValueError):
+    if not DUMMY_MODE: # HTTPS証明書の存在チェック (ダミーモードでは不要)
+        if not os.path.exists(CERT_PATH):
+            logger.critical(f"HTTPS証明書ファイルが見つかりません: {CERT_PATH}")
+            raise FileNotFoundError(f"HTTPS証明書ファイルが見つかりません: {CERT_PATH}")
+        if not os.path.exists(KEY_PATH):
+            logger.critical(f"HTTPS秘密鍵ファイルが見つかりません: {KEY_PATH}")
+            raise FileNotFoundError(f"HTTPS秘密鍵ファイルが見つかりません: {KEY_PATH}")
+
+
+except (configparser.Error, ValueError, FileNotFoundError) as e:
+    if isinstance(e, ValueError) or isinstance(e, FileNotFoundError):
         error_msg = str(e)
         problem_key = "Unknown"
+        # 発生したエラーメッセージに基づいて、どの設定項目が問題か特定
         for section in config.sections():
             for option in config.options(section):
-                if option in error_msg:
+                if option in error_msg: # エラーメッセージにオプション名が含まれるか
                     problem_key = f"[{section}].{option}"
+                    break
+                # 特定のメッセージパターンでさらに絞り込み
+                if "HTTPS証明書" in error_msg and (option == 'CertPath' or option == 'KeyPath'):
+                    problem_key = f"[General].{option}"
                     break
             if problem_key != "Unknown":
                 break
-        logger.critical(f"設定ファイルの型変換または値の範囲エラー: {problem_key} - {error_msg}. "
+        logger.critical(f"設定ファイルの型変換、値の範囲、またはファイルパスエラー: {problem_key} - {error_msg}. "
                         f"config.iniの該当項目を確認してください。")
     else:
         logger.critical(f"設定ファイルの読み込みエラー: {e}")
@@ -185,10 +211,10 @@ class SensorData:
         self.data_updated_event = threading.Event()
         self.base_connected: bool = False
         self.rover_connected: bool = False
-        self.base_connection_timestamp: float = 0.0 # 新しく追加
-        self.rover_connection_timestamp: float = 0.0 # 新しく追加
+        self.base_connection_timestamp: float = 0.0
+        self.rover_connection_timestamp: float = 0.0
 
-        # エラーカウンター (新しく追加)
+        # エラーカウンター
         self.base_port_errors: int = 0
         self.base_serial_errors: int = 0
         self.rover_port_errors: int = 0
@@ -199,13 +225,13 @@ class SensorData:
         with self.lock:
             if target_key == 'base':
                 self.base_data = {'lat': lat, 'lon': lon, 'hdop': hdop, 'quality': quality, 'timestamp': time.monotonic()}
-                if not self.base_connected: # 接続が確立された瞬間にログを記録
+                if not self.base_connected:
                     self.base_connected = True
                     self.base_connection_timestamp = time.monotonic()
                     logger.info(f"GPS Base ({GPS_BASE_PORT}) が接続されました。")
             else:
                 self.rover_data = {'lat': lat, 'lon': lon, 'hdop': hdop, 'quality': quality, 'timestamp': time.monotonic()}
-                if not self.rover_connected: # 接続が確立された瞬間にログを記録
+                if not self.rover_connected:
                     self.rover_connected = True
                     self.rover_connection_timestamp = time.monotonic()
                     logger.info(f"GPS Rover ({GPS_ROVER_PORT}) が接続されました。")
@@ -224,7 +250,7 @@ class SensorData:
             if len(self.gyro_z_buffer) > 1:
                 mean = sum(self.gyro_z_buffer) / len(self.gyro_z_buffer)
                 std = (sum((x - mean) ** 2 for x in self.gyro_z_buffer) / len(self.gyro_z_buffer)) ** 0.5
-                if std > 0.001 and abs(corrected_z - mean) > IMU_GYRO_OUTLIER_THRESHOLD * std: # config.iniからの閾値を使用
+                if std > 0.001 and abs(corrected_z - mean) > IMU_GYRO_OUTLIER_THRESHOLD * std:
                     logger.debug(f"IMU異常値検出 (raw: {raw_z:.5f}, corrected: {corrected_z:.5f}, mean: {mean:.5f}, std: {std:.5f}, threshold: ±{IMU_GYRO_OUTLIER_THRESHOLD*std:.5f})。スキップします。")
                     return
             
@@ -364,47 +390,51 @@ def read_gps_thread(port: str, target_key: str, sensor_data: SensorData):
             time.sleep(delta_t_dummy)
     else:
         ser: Optional[serial.Serial] = None
-        port_error_count = 0 # 各スレッドでローカルにエラーカウントを保持
-        serial_error_count = 0
+        # 各スレッドでローカルにエラーカウントを保持し、SensorDataに更新
+        port_error_count_local = 0
+        serial_error_count_local = 0
 
         while not stop_event.is_set():
             if not os.path.exists(port):
                 current_time = time.monotonic()
                 if current_time - last_port_error_log_time > SERIAL_RETRY_INTERVAL:
-                    if port_error_count == 0:
+                    if port_error_count_local == 0:
                         logger.error(f"GPSポート {port} が見つかりません。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
                     else:
-                        logger.warning(f"GPSポート {port} のエラーが継続中 ({port_error_count}回目)。")
+                        logger.warning(f"GPSポート {port} のエラーが継続中 ({port_error_count_local}回目)。")
                     last_port_error_log_time = current_time
                     
-                    with sensor_data.lock: # エラーカウントをSensorDataに更新
+                    with sensor_data.lock:
                         if target_key == 'base':
                             sensor_data.base_port_errors += 1
                         else:
                             sensor_data.rover_port_errors += 1
+                    port_error_count_local += 1 # ローカルカウンタもインクリメント
                 time.sleep(SERIAL_RETRY_INTERVAL)
                 continue
 
-            if serial_error_count >= GPS_MAX_RETRY_COUNT:
+            if serial_error_count_local >= GPS_MAX_RETRY_COUNT:
                 logger.error(f"GPSポート {port} の再接続上限回数 ({GPS_MAX_RETRY_COUNT}) に達しました。スレッドを終了します。")
                 with sensor_data.lock:
                     if target_key == 'base':
-                        sensor_data.base_connected = False
-                        sensor_data.base_connection_timestamp = time.monotonic()
-                        logger.error(f"GPS Base ({port}) の接続が切断されました。")
+                        if sensor_data.base_connected: # 接続が切断された瞬間にログ
+                            sensor_data.base_connected = False
+                            sensor_data.base_connection_timestamp = time.monotonic()
+                            logger.error(f"GPS Base ({port}) の接続が切断されました。")
                     else:
-                        sensor_data.rover_connected = False
-                        sensor_data.rover_connection_timestamp = time.monotonic()
-                        logger.error(f"GPS Rover ({port}) の接続が切断されました。")
+                        if sensor_data.rover_connected: # 接続が切断された瞬間にログ
+                            sensor_data.rover_connected = False
+                            sensor_data.rover_connection_timestamp = time.monotonic()
+                            logger.error(f"GPS Rover ({port}) の接続が切断されました。")
                 break
 
             try:
                 if ser is None or not ser.is_open:
                     ser = serial.Serial(port, BAUDRATE, timeout=0.5)
                     logger.info(f"GPSポート {port} が正常に開かれました。")
-                    port_error_count = 0
-                    serial_error_count = 0
-                    # 接続が正常になった場合、SensorDataの接続フラグも更新される (update_gps_data内で)
+                    port_error_count_local = 0
+                    serial_error_count_local = 0
+                    # 接続が正常になった場合、SensorDataの接続フラグもupdate_gps_data内で更新される
 
                 while not stop_event.is_set():
                     try:
@@ -413,7 +443,7 @@ def read_gps_thread(port: str, target_key: str, sensor_data: SensorData):
                             try:
                                 msg = pynmea2.parse(line)
                                 sensor_data.update_gps_data(target_key, msg.latitude, msg.longitude, float(msg.horizontal_dil), int(msg.gps_qual))
-                                serial_error_count = 0 # 正常受信でリセット
+                                serial_error_count_local = 0 # 正常受信でローカルカウンタをリセット
                             except pynmea2.ParseError as e:
                                 logger.debug(f"NMEAパースエラー ({port}): {e} - Line: {line}")
                                 continue
@@ -423,48 +453,51 @@ def read_gps_thread(port: str, target_key: str, sensor_data: SensorData):
                     except Exception as e: # シリアル通信中の一般的なエラー
                         current_time = time.monotonic()
                         if current_time - last_serial_error_log_time > SERIAL_RETRY_INTERVAL:
-                            if serial_error_count == 0:
+                            if serial_error_count_local == 0:
                                 logger.error(f"GPSポート {port} 読み取り中の予期せぬエラー: {e}。再接続を試みます。")
                             else:
-                                logger.warning(f"GPSポート {port} の読み取りエラーが継続中 ({serial_error_count}回目)。再接続を試みます。")
+                                logger.warning(f"GPSポート {port} の読み取りエラーが継続中 ({serial_error_count_local}回目)。再接続を試みます。")
                             last_serial_error_log_time = current_time
                             
-                            with sensor_data.lock: # エラーカウントをSensorDataに更新
+                            with sensor_data.lock:
                                 if target_key == 'base':
                                     sensor_data.base_serial_errors += 1
                                 else:
                                     sensor_data.rover_serial_errors += 1
+                            serial_error_count_local += 1 # ローカルカウンタもインクリメント
                         break # エラー発生で内側のループを抜け、外側で再接続を試みる
                     time.sleep(GPS_READ_INTERVAL)
             except serial.SerialException as e: # シリアルポートを開く際のエラー
                 current_time = time.monotonic()
                 if current_time - last_serial_error_log_time > SERIAL_RETRY_INTERVAL:
-                    if serial_error_count == 0:
+                    if serial_error_count_local == 0:
                         logger.error(f"GPSポート {port} を開けません: {e}。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
                     else:
-                        logger.warning(f"GPSポート {port} の接続エラーが継続中 ({serial_error_count}回目)。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
+                        logger.warning(f"GPSポート {port} の接続エラーが継続中 ({serial_error_count_local}回目)。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
                     last_serial_error_log_time = current_time
                     
-                    with sensor_data.lock: # エラーカウントをSensorDataに更新
+                    with sensor_data.lock:
                         if target_key == 'base':
                             sensor_data.base_serial_errors += 1
                         else:
                             sensor_data.rover_serial_errors += 1
+                    serial_error_count_local += 1 # ローカルカウンタもインクリメント
                 time.sleep(SERIAL_RETRY_INTERVAL)
             except Exception as e: # その他の予期せぬエラー
                 current_time = time.monotonic()
                 if current_time - last_serial_error_log_time > SERIAL_RETRY_INTERVAL:
-                    if serial_error_count == 0:
+                    if serial_error_count_local == 0:
                         logger.error(f"GPSポート {port} で予期せぬエラーが発生しました: {e}。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
                     else:
-                        logger.warning(f"GPSポート {port} の予期せぬエラーが継続中 ({serial_error_count}回目)。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
+                        logger.warning(f"GPSポート {port} の予期せぬエラーが継続中 ({serial_error_count_local}回目)。{SERIAL_RETRY_INTERVAL}秒後に再試行します。")
                     last_serial_error_log_time = current_time
                     
-                    with sensor_data.lock: # エラーカウントをSensorDataに更新
+                    with sensor_data.lock:
                         if target_key == 'base':
                             sensor_data.base_serial_errors += 1
                         else:
                             sensor_data.rover_serial_errors += 1
+                    serial_error_count_local += 1 # ローカルカウンタもインクリメント
                 time.sleep(SERIAL_RETRY_INTERVAL)
             finally:
                 if ser and ser.is_open:
@@ -479,7 +512,7 @@ def calculate_heading_and_error_thread(sensor_data: SensorData):
     GPSデータとIMUデータを基に、ヘディングと基線長誤差を計算し、SensorDataオブジェクトを更新するスレッド。
     データ更新をトリガーとするイベント駆動型。
     """
-    last_calc_time = 0.0 # 前回の計算時刻を保持
+    last_calc_time = 0.0
 
     while not stop_event.is_set():
         if not sensor_data.data_updated_event.wait(timeout=CALCULATION_INTERVAL):
@@ -505,25 +538,25 @@ def calculate_heading_and_error_thread(sensor_data: SensorData):
 
         # 最新データが前回の計算時刻より新しいかチェック
         if max(current_base_timestamp, current_rover_timestamp) <= last_calc_time:
-            logger.debug(f"データが更新されていないため計算をスキップ。GPS Base timestamp: {current_base_timestamp}, GPS Rover timestamp: {current_rover_timestamp}, Last calc time: {last_calc_time}")
+            # logger.debug(f"データが更新されていないため計算をスキップ。GPS Base timestamp: {current_base_timestamp}, GPS Rover timestamp: {current_rover_timestamp}, Last calc time: {last_calc_time}")
             continue
         last_calc_time = time.monotonic() # 計算時刻を更新
 
         # GPS接続状態のチェック
         if not (base_connected and rover_connected):
-            logger.info("GPS接続が切断されているため、ヘディング計算をスキップします。")
+            # logger.info("GPS接続が切断されているため、ヘディング計算をスキップします。") # ログが多すぎる場合があるのでコメントアウト
             continue
 
         # GPSデータの有効性チェックを強化
         if (lat1 == 0.0 and lon1 == 0.0) or (lat2 == 0.0 and lon2 == 0.0) or \
            hdop_base > HDOP_THRESHOLD or hdop_rover > HDOP_THRESHOLD or \
            quality_base < GPS_FIX_QUALITY_THRESHOLD or quality_rover < GPS_FIX_QUALITY_THRESHOLD:
-            logger.info(
-                f"無効なGPSデータのため計算をスキップ: "
-                f"Base(lat={lat1:.5f}, lon={lon1:.5f}, hdop={hdop_base:.2f}, qual={quality_base}), "
-                f"Rover(lat={lat2:.5f}, lon={lon2:.5f}, hdop={hdop_rover:.2f}, qual={quality_rover}). "
-                f"HDOP閾値={HDOP_THRESHOLD}, 品質閾値={GPS_FIX_QUALITY_THRESHOLD}"
-            )
+            # logger.info( # ログが多すぎる場合があるのでコメントアウト
+            #     f"無効なGPSデータのため計算をスキップ: "
+            #     f"Base(lat={lat1:.5f}, lon={lon1:.5f}, hdop={hdop_base:.2f}, qual={quality_base}), "
+            #     f"Rover(lat={lat2:.5f}, lon={lon2:.5f}, hdop={hdop_rover:.2f}, qual={quality_rover}). "
+            #     f"HDOP閾値={HDOP_THRESHOLD}, 品質閾値={GPS_FIX_QUALITY_THRESHOLD}"
+            # )
             continue
 
         az12, _, calculated_distance = geod.inv(lon1, lat1, lon2, lat2)
@@ -556,68 +589,92 @@ def calculate_heading_and_error_thread(sensor_data: SensorData):
 
     logger.info("ヘディング計算スレッドを停止します。")
 
+# --- 認証デコレータ ---
+def require_api_key(f):
+    """APIキー認証を要求するデコレータ。"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if DUMMY_MODE: # ダミーモードでは認証をスキップ
+            return f(*args, **kwargs)
+
+        request_api_key = request.headers.get('X-API-Key')
+        if request_api_key and request_api_key == API_KEY:
+            return f(*args, **kwargs)
+        else:
+            logger.warning(f"不正なAPIキーアクセス試行: {request.path} from {request.remote_addr}")
+            return jsonify({"status": "error", "message": "Unauthorized: Invalid or missing API Key"}), 401
+    return decorated_function
+
 # --- キャリブレーションAPI ---
 @app.route("/api/calibration/start", methods=["POST"])
+@require_api_key # 認証を要求
 def calibration_start():
     if DUMMY_MODE:
         return jsonify({"status": "error", "message": "ダミーモードではキャリブレーションできません。"}), 400
 
     with sensor_data.lock:
         if sensor_data.calibration_mode:
+            logger.warning(f"IMUキャリブレーションが既に進行中。要求元: {request.remote_addr}")
             return jsonify({"status": "error", "message": "既にキャリブレーション中です。"}), 400
         if not sensor_data.imu_status:
+            logger.error(f"IMUが利用できないためキャリブレーション開始を拒否。要求元: {request.remote_addr}")
             return jsonify({"status": "error", "message": "IMUが接続されていないか、利用できません。"}), 503
         
         sensor_data.calibration_mode = True
         sensor_data.calibration_samples.clear()
-    logger.info("IMUキャリブレーションを開始しました。デバイスを静止させてください。")
+    logger.info(f"IMUキャリブレーションを開始しました。デバイスを静止させてください。要求元: {request.remote_addr}")
     return jsonify({"status": "ok", "message": "キャリブレーション開始。デバイスを静止させてください。"})
 
 @app.route("/api/calibration/stop", methods=["POST"])
+@require_api_key # 認証を要求
 def calibration_stop():
     if DUMMY_MODE:
         return jsonify({"status": "error", "message": "ダミーモードではキャリブレーションできません。"}), 400
 
     with sensor_data.lock:
         if not sensor_data.calibration_mode:
+            logger.warning(f"IMUキャリブレーションが開始されていないため停止を拒否。要求元: {request.remote_addr}")
             return jsonify({"status": "error", "message": "キャリブレーションは開始されていません。"}), 400
         sensor_data.calibration_mode = False
         samples = sensor_data.calibration_samples.copy()
         sensor_data.calibration_samples.clear()
 
     if len(samples) < 100:
-        logger.warning(f"キャリブレーション用のサンプル数が不足しています ({len(samples)}/100)。")
+        logger.warning(f"キャリブレーション用のサンプル数が不足しています ({len(samples)}/100)。オフセットは適用されません。要求元: {request.remote_addr}")
         return jsonify({"status": "warning", "message": f"キャリブレーション用のサンプルが不足しています ({len(samples)}/100)。オフセットは適用されません。", "gyro_z_offset": sensor_data.gyro_z_offset}), 200
 
     offset = sum(samples) / len(samples)
     with sensor_data.lock:
         sensor_data.gyro_z_offset = offset
-        # バッファ内のデータを新しいオフセットで再計算
         sensor_data.gyro_z_buffer = deque(
             [x - offset for x in sensor_data.gyro_z_buffer], maxlen=IMU_GYRO_BUFFER_SIZE)
         sensor_data.imu_raw_gyro_z = sum(sensor_data.gyro_z_buffer) / len(sensor_data.gyro_z_buffer) if sensor_data.gyro_z_buffer else 0.0
 
-    logger.info(f"IMUキャリブレーション完了。ジャイロZオフセット = {offset:.5f}")
+    logger.info(f"IMUキャリブレーション完了。ジャイロZオフセット = {offset:.5f}。要求元: {request.remote_addr}")
     return jsonify({"status": "ok", "message": "キャリブレーション完了。", "gyro_z_offset": round(offset, 5)})
 
 # --- ログレベル変更API ---
 @app.route("/api/log_level", methods=["POST"])
+@require_api_key # 認証を要求
 def set_log_level():
     level_str = request.json.get('level', 'INFO').upper()
     try:
         level = getattr(logging, level_str)
+        # ログレベル変更をセキュリティログに記録
+        logger.info(f"API経由でログレベル変更を要求: {level_str} (要求元: {request.remote_addr})")
         logger.setLevel(level)
-        # config.ini にログレベルを保存
         config['General']['LogLevel'] = level_str
         with open(config_file_path, 'w') as f:
             config.write(f)
-        logger.info(f"ログレベルを {logging.getLevelName(level)} に変更し、config.iniに保存しました。")
+        logger.info(f"ログレベルを {logging.getLevelName(level)} に変更し、config.iniに保存しました。", extra={'log_history': True}) # log_history_handlerに記録
         return jsonify({"status": "ok", "message": f"ログレベルを {level_str} に設定しました。"})
     except AttributeError:
+        logger.warning(f"無効なログレベル変更試行: {level_str} (要求元: {request.remote_addr})")
         return jsonify({"status": "error", "message": f"無効なログレベル: {level_str}。有効なレベルは DEBUG, INFO, WARNING, ERROR, CRITICAL です。"}), 400
 
 # --- データ取得API ---
 @app.route("/api/data")
+@require_api_key # 認証を要求
 def api_data():
     with sensor_data.lock:
         response = {
@@ -640,6 +697,7 @@ def api_data():
 
 # --- APIステータスエンドポイント ---
 @app.route("/api/status")
+@require_api_key # 認証を要求
 def api_status():
     with sensor_data.lock:
         status_info = {
@@ -666,6 +724,8 @@ def api_status():
 # --- Web UI ---
 @app.route("/")
 def index():
+    # UIにAPIキーを直接埋め込むのはセキュリティリスクがあるため、ここではHTMLを返すだけ。
+    # UIからAPIを呼び出す場合は、別途APIキーを安全に扱う仕組みが必要。
     return render_template("index.html")
 
 # --- スレッド起動 ---
@@ -685,13 +745,39 @@ if __name__ == "__main__":
     # 環境変数 FLASK_ENV のチェック
     if os.getenv('FLASK_ENV') != 'production':
         logger.warning("環境変数 'FLASK_ENV' が 'production' に設定されていません。本番環境では 'FLASK_ENV=production' を設定してください。")
-        
+    
+    # ログファイルの権限に関する警告 (ログ保護の運用上の注意)
+    logger.info("ログファイルの保護に関する運用上の注意:")
+    logger.info("  1. アプリケーションが動作するユーザーは、以下のログファイルへの書き込み権限が必要です。")
+    logger.info(f"     - {os.path.abspath('app.log')}")
+    logger.info(f"     - {os.path.abspath('log_history.log')}")
+    logger.info("  2. 他のユーザーからのこれらのファイルへの読み取り/書き込み/実行権限を制限し、不正なアクセスや改ざんを防いでください。")
+    logger.info("  3. 定期的にログをレビューし、異常を検出してください。")
+    logger.info("  4. 重要なセキュリティイベント（APIキー認証失敗など）はログに記録されます。")
+
+
     start_threads()
     
     try:
         flask_host = os.getenv('FLASK_HOST', '0.0.0.0')
         flask_port = int(os.getenv('FLASK_PORT', 5000))
-        app.run(host=flask_host, port=flask_port, debug=False)
+        
+        # HTTPSコンテキストの生成 (自己署名証明書を使用)
+        ssl_context = None
+        if not DUMMY_MODE: # ダミーモードではHTTPS不要
+            try:
+                # Flaskのssl_contextは、PEM形式の証明書と秘密鍵のペアを受け入れる
+                # より厳格なTLSバージョンや暗号スイートの指定は、本番環境ではNginx/Apache等のリバースプロキシで行うべき
+                ssl_context = (CERT_PATH, KEY_PATH)
+                logger.info(f"HTTPSを有効化: 証明書={CERT_PATH}, 秘密鍵={KEY_PATH}")
+                logger.warning("警告: 開発用自己署名証明書を使用しています。本番環境では必ず正式な証明書を使用してください。")
+            except Exception as e:
+                logger.critical(f"HTTPSコンテキストの生成に失敗しました: {e}。アプリケーションを終了します。", exc_info=True)
+                stop_event.set() # スレッドを終了させる
+                exit(1)
+
+        # HTTPSを有効にしてFlaskを実行
+        app.run(host=flask_host, port=flask_port, debug=False, ssl_context=ssl_context)
     except KeyboardInterrupt:
         logger.info("Ctrl+Cが検出されました。アプリケーションを終了します。")
     finally:
@@ -702,3 +788,5 @@ if __name__ == "__main__":
                 thread.join(timeout=5.0)
 
         logger.info("全てのスレッドが終了しました。アプリケーションを終了します。")
+
+

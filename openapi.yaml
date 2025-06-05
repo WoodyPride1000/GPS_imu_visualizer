@@ -1,0 +1,97 @@
+openapi: 3.0.0
+info:
+  title: GPS Compass API
+  version: 1.0.0
+  description: API for accessing GPS/IMU data and system controls.
+servers:
+  - url: http://localhost:5000
+paths:
+  /api/data:
+    get:
+      summary: Get current sensor data
+      responses:
+        '200':
+          description: Latest sensor data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  base:
+                    type: object
+                  rover:
+                    type: object
+                  heading_gps:
+                    type: number
+                  heading_fused:
+                    type: number
+                  distance:
+                    type: number
+                  error:
+                    type: number
+                  imu_status:
+                    type: boolean
+                  gyro_z_corrected:
+                    type: number
+                  gyro_z_offset:
+                    type: number
+                  dummy_mode:
+                    type: boolean
+                  base_connected:
+                    type: boolean
+                  rover_connected:
+                    type: boolean
+  /api/status:
+    get:
+      summary: Get system status
+      responses:
+        '200':
+          description: Application and device status
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/calibration/start:
+    post:
+      summary: Start IMU calibration
+      responses:
+        '200':
+          description: Calibration started
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Calibration error
+        '503':
+          description: IMU unavailable
+  /api/calibration/stop:
+    post:
+      summary: Complete IMU calibration
+      responses:
+        '200':
+          description: Calibration result
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Not in calibration mode
+  /api/log_level:
+    post:
+      summary: Change log level
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                level:
+                  type: string
+                  example: INFO
+      responses:
+        '200':
+          description: Log level changed
+        '400':
+          description: Invalid log level

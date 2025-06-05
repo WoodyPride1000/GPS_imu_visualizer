@@ -89,4 +89,13 @@ POST /api/log_level
 {
   "level": "INFO"
 }
+```
 
+2. HTTPS 自己署名証明書の生成 (実行前に行うこと)
+
+以下のコマンドをターミナルで実行し、cert.pem と key.pem を生成します。
+```
+openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365 -subj "/C=JP/ST=Saitama/L=Higashimatsuyama/O=YourCompany/OU=YourApp/CN=localhost"
+```
+
+生成された cert.pem と key.pem は、スクリプトと同じディレクトリに配置してください。

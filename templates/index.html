@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="/static/leaflet/leaflet.css" />
     <link rel="stylesheet" href="/static/styles.css" />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* 新しいグラフエリアのスタイル */
         #graph-container {
@@ -25,24 +24,38 @@
             justify-content: center;
             align-items: center;
         }
-        #myChart {
+        #azimuthChart { /* IDをmyChartからazimuthChartに変更 */
             width: 100% !important;
             height: 100% !important;
         }
+        /* 追加: map div の高さ設定 */
+        #map {
+            height: 100vh; /* ビューポートの高さ全体を使う */
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1; /* オーバーレイボックスより低いz-indexを設定 */
+        }
+
+        /* 接続ステータス表示用のスタイル (styles.cssに移動しても良い) */
+        .status-ok { color: green; font-weight: bold; }
+        .status-ng { color: red; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="info-box overlay-box">
-        <div>座標系: <span id="coord_system">緯度経度</span></div>
-        <div>X: <span id="x_coord">--</span></div>
-        <div>Y: <span id="y_coord">--</span></div>
-        <div>方位角: <span id="heading">--</span>°</div>
+        <div>緯度: <span id="baseLat">--</span></div> <div>経度: <span id="baseLon">--</span></div> <div>HDOP（基準局）: <span id="hdopBase">--</span></div> <div>HDOP（移動局）: <span id="hdopRover">--</span></div> <div>品質（基準局）: <span id="qualityBase">--</span></div> <div>品質（移動局）: <span id="qualityRover">--</span></div> <div>方位角: <span id="heading">--</span>°</div>
         <div>基線長: <span id="distance">--</span> m</div>
         <div>基線誤差: <span id="error">--</span> m</div>
-        <div>IMU使用: <span id="imu">--</span></div>
-        <div>IMU Z軸角速度: <span id="imu_raw_gyro_z">--</span> °/s</div>
-        <div>HDOP（基準局）: <span id="hdop_base">--</span></div>
-        <div>HDOP（移動局）: <span id="hdop_rover">--</span></div>
+        <div>IMU使用: <span id="imuStatus">--</span></div> <div>IMU Z軸角速度: <span id="imuRawGyroZ">--</span> °/s</div> <div>ジャイロZオフセット: <span id="gyroZOffset">--</span> °/s</div> <div id="baseConnected">基準局接続: --</div>
+        <div id="roverConnected">移動局接続: --</div>
+        <div id="basePortErrors">基準局ポートエラー: --</div>
+        <div id="baseSerialErrors">基準局シリアルエラー: --</div>
+        <div id="roverPortErrors">移動局ポートエラー: --</div>
+        <div id="roverSerialErrors">移動局シリアルエラー: --</div>
+        <div id="dummyMode">ダミーモード: --</div>
+        <div id="logLevel">ログレベル: --</div>
         <div id="status-message"></div>
     </div>
 
@@ -61,6 +74,15 @@
             <option value="utm">UTM</option>
             <option value="jgd2011">平面直角座標</option>
         </select>
+        <button id="calibrateButton">キャリブレーション開始</button>
+        <select id="logLevelSelect" aria-label="ログレベル選択">
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO" selected>INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+            <option value="CRITICAL">CRITICAL</option>
+        </select>
+        <button id="setLogLevelButton">ログレベル設定</button>
     </div>
 
     <div class="slider-box overlay-box">
@@ -70,104 +92,10 @@
 
     <div id="graph-container" class="overlay-box">
         <h3>方位角別データ</h3>
-        <canvas id="myChart"></canvas>
-    </div>
+        <canvas id="azimuthChart"></canvas> </div>
 
-    <div id="map"></div>
-
+    <div id="map"></div> <script src="/static/leaflet/leaflet.js"></script>
     <script src="/static/proj4.js"></script>
-    <script src="/static/leaflet/leaflet.js"></script>
-    <script>
-        // 既存のJavaScriptコードはそのまま
-        // ... (proj4定義、CustomGridLayer定義、stateオブジェクト、イベントリスナーなど)
-
-        // --- グラフ関連の変数と初期化 ---
-        let myChart; // Chart.jsのインスタンスを保持する変数
-
-        function initializeChart() {
-            const ctx = document.getElementById('myChart').getContext('2d');
-            myChart = new Chart(ctx, {
-                type: 'line', // 折れ線グラフ
-                data: {
-                    labels: [], // 横軸（方位角）のデータ
-                    datasets: [{
-                        label: 'シリアルデータ',
-                        data: [], // 縦軸（-20〜-99）のデータ
-                        borderColor: 'rgb(75, 192, 192)',
-                        tension: 0.1,
-                        fill: false
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false, // コンテナのサイズに合わせて調整
-                    scales: {
-                        x: {
-                            title: {
-                                display: true,
-                                text: '方位角の算出角度 (°)'
-                            },
-                            min: 0, // 方位角は0から360度
-                            max: 360,
-                            ticks: {
-                                stepSize: 45 // 軸の目盛間隔
-                            }
-                        },
-                        y: {
-                            title: {
-                                display: true,
-                                text: 'データ値' // 実際のデータの意味に合わせて変更
-                            },
-                            min: -99, // 縦軸の最小値
-                            max: -20  // 縦軸の最大値
-                        }
-                    },
-                    animation: false // リアルタイム更新のためアニメーションを無効に
-                }
-            });
-        }
-
-        // --- グラフデータの更新関数 ---
-        function updateGraphData() {
-            fetch('/api/graph_data')
-                .then(res => {
-                    if (!res.ok) throw new Error(`HTTPエラー! ステータス: ${res.status}`);
-                    return res.json();
-                })
-                .then(data => {
-                    myChart.data.labels = data.azimuths;
-                    myChart.data.datasets[0].data = data.values;
-                    myChart.update(); // グラフを更新
-                })
-                .catch(error => {
-                    console.error("グラフデータの取得エラー:", error);
-                });
-        }
-
-        // 既存の `update()` 関数にグラフ更新の呼び出しを追加
-        function update() {
-            // ... 既存のコード ...
-
-            fetch('/api/position')
-                // ... 既存のコード ...
-                .then(data => {
-                    // ... 既存のUI更新とマップ要素の更新 ...
-                    redrawMapElements(); // マップ要素の再描画
-
-                    // グラフデータの更新を呼び出す
-                    updateGraphData();
-                })
-                .catch(error => {
-                    // ... 既存のエラーハンドリング ...
-                });
-        }
-
-        // ページロード時にグラフを初期化
-        document.addEventListener('DOMContentLoaded', () => {
-            initializeChart();
-            updateGeometrySizes();
-            setInterval(update, API_FETCH_INTERVAL);
-        });
-    </script>
+    <script src="/static/script.js"></script>
 </body>
 </html>

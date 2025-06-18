@@ -11,6 +11,26 @@ import os
 from functools import wraps
 import random # ダミーデータ生成用
 
+import configparser
+import logging
+import logging.handlers
+import os
+import threading
+import time
+import random
+import serial
+import pynmea2
+import math
+import ssl # HTTPS化のために追加
+from flask import Flask, jsonify, render_template, request
+from pyproj import Geod
+from typing import Dict, Optional, List
+from collections import deque
+from functools import wraps # 認証デコレータのために追加
+
+
+
+
 from flask import Flask, jsonify, render_template, request
 from geopy.distance import geodesic # geopyライブラリが必要: pip install geopy
 from pyproj import Geod # 方位角計算用にGeodをインポート

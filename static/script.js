@@ -53,6 +53,10 @@ function initMap() {
         maxZoom: 19
     }).addTo(map);
 
+    // マップのサイズを再計算してタイルを適切に表示させる
+    // これにより、初期表示時のタイルずれが解消される可能性があります。
+    map.invalidateSize();
+
     // 基準局と移動局のマーカーを東京駅の初期位置に設定
     baseMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "基準局"}).addTo(map).bindPopup("基準局").openPopup();
     roverMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "移動局"}).addTo(map).bindPopup("移動局").openPopup();
@@ -379,11 +383,9 @@ async function fetchSensorData() {
         document.getElementById('roverPortErrors').textContent = data.rover_port_errors;
         document.getElementById('roverSerialErrors').textContent = data.rover_serial_errors;
 
-        // --- ここから修正 ---
         // IDがspan要素に直接付与されているため、querySelector('span')は不要
         document.getElementById('dummyMode').textContent = data.dummy_mode ? 'ON' : 'OFF';
         document.getElementById('logLevel').textContent = data.log_level;
-        // --- 修正ここまで ---
 
         document.getElementById('status-message').textContent = ""; // エラーメッセージをクリア (成功時)
 

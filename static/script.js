@@ -42,31 +42,37 @@ function normalizeAngleDifference(angle1, angle2) {
 
 // --- 地図の初期化 ---
 function initMap() {
+    console.log("initMap: Starting map initialization."); // 診断用ログ
     // 東京駅周辺を初期位置として設定
     const tokyoStationLat = 35.681236;
     const tokyoStationLon = 139.767125;
 
+    console.log("initMap: Attempting to create L.map instance."); // 診断用ログ
     map = L.map('map').setView([tokyoStationLat, tokyoStationLon], 18); // 初期位置とズームレベル
+    console.log("initMap: L.map instance created."); // 診断用ログ
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19
     }).addTo(map);
+    console.log("initMap: Tile layer added."); // 診断用ログ
 
     // マップのサイズを再計算してタイルを適切に表示させる
-    // requestAnimationFrameとsetTimeoutを組み合わせることで、
-    // DOMとCSSのレンダリングが完全に安定するのを待つ
     window.requestAnimationFrame(() => {
         setTimeout(() => {
+            console.log("initMap: Invalidating map size."); // 診断用ログ
             map.invalidateSize();
+            console.log("initMap: Map size invalidated."); // 診断用ログ
         }, 0); // 最小限の遅延 (DOMが完全に構築されてから次のマイクロタスクで実行)
     });
 
     // ウィンドウのリサイズイベントにリスナーを追加
     // これにより、ブラウザウィンドウのサイズが変更されたときに地図が自動的に調整されます。
     window.addEventListener('resize', () => {
+        console.log("Resize event: Invalidating map size."); // 診断用ログ
         map.invalidateSize();
     });
+    console.log("initMap: Event listeners added and initial setup complete."); // 診断用ログ
 
     // 基準局と移動局のマーカーを東京駅の初期位置に設定
     baseMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "基準局"}).addTo(map).bindPopup("基準局").openPopup();
@@ -548,7 +554,9 @@ async function fetchNMEAData() {
 
 // --- イベントリスナー ---
 document.addEventListener('DOMContentLoaded', () => {
+    console.log("DOMContentLoaded: Event fired. Calling initMap()."); // 診断用ログ
     initMap();
+    console.log("DOMContentLoaded: initMap() called. Initializing charts and intervals."); // 診断用ログ
     initChart(); // Chart.jsの初期化
     setInterval(fetchSensorData, 2000); // 2秒ごとにデータ更新
     setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新 (変更なし)

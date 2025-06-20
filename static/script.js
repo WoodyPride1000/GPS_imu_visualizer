@@ -338,13 +338,12 @@ async function fetchSensorData() {
         }
 
         // 地図の追従
-        if (document.getElementById('followMapCheckbox').checked) { // followMap変数ではなくチェックボックスの状態を見る
+        if (document.getElementById('followMapCheckbox').checked) {
             map.setView([baseLat, baseLon], map.getZoom());
         }
 
         // Info Boxの更新
         const convertedBase = convertCoordinates(baseLat, baseLon, currentCoordSystem);
-        // latDisplay と lonDisplay は直接 convertedBase の text プロパティを使用
         document.getElementById('baseLat').textContent = convertedBase.text.split(',')[0].trim();
         document.getElementById('baseLon').textContent = convertedBase.text.split(',')[1] ? convertedBase.text.split(',')[1].trim() : '';
 
@@ -368,6 +367,7 @@ async function fetchSensorData() {
         document.getElementById('imuRawGyroZ').textContent = data.imu_raw_gyro_z.toFixed(5);
         document.getElementById('gyroZOffset').textContent = data.gyro_z_offset.toFixed(5);
         
+        // baseConnectedとroverConnectedはdivにIDがあり、spanはその子要素
         document.getElementById('baseConnected').querySelector('span').className = data.base_connected ? 'status-ok' : 'status-ng';
         document.getElementById('baseConnected').querySelector('span').textContent = data.base_connected ? '接続中' : '切断';
         
@@ -379,8 +379,11 @@ async function fetchSensorData() {
         document.getElementById('roverPortErrors').textContent = data.rover_port_errors;
         document.getElementById('roverSerialErrors').textContent = data.rover_serial_errors;
 
-        document.getElementById('dummyMode').querySelector('span').textContent = data.dummy_mode ? 'ON' : 'OFF';
-        document.getElementById('logLevel').querySelector('span').textContent = data.log_level;
+        // --- ここから修正 ---
+        // IDがspan要素に直接付与されているため、querySelector('span')は不要
+        document.getElementById('dummyMode').textContent = data.dummy_mode ? 'ON' : 'OFF';
+        document.getElementById('logLevel').textContent = data.log_level;
+        // --- 修正ここまで ---
 
         document.getElementById('status-message').textContent = ""; // エラーメッセージをクリア (成功時)
 
@@ -539,7 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 地図追従チェックボックス
     document.getElementById('followMapCheckbox').addEventListener('change', (e) => {
-        followMap = e.target.checked; // この変数は使ってないが念のため維持
+        followMap = e.target.checked;
     });
 
     // グリッド線表示チェックボックス

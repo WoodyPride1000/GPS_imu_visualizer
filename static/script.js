@@ -681,12 +681,16 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('nmeaToggleButton').addEventListener('click', () => {
         showNMEA = !showNMEA;
         const nmeaContainer = document.getElementById('nmea-container');
+        console.log(`NMEA Toggle: showNMEA=${showNMEA}`); // 診断用ログ
         if (showNMEA) {
             nmeaContainer.style.display = 'flex';
+            console.log("NMEA Toggle: Setting display to 'flex'."); // 診断用ログ
             fetchNMEAData(); // 表示開始時に一度データを取得
         } else {
             nmeaContainer.style.display = 'none';
+            console.log("NMEA Toggle: Setting display to 'none'."); // 診断用ログ
         }
+        console.log("NMEA Toggle: NMEA container display is now:", nmeaContainer.style.display); // 診断用ログ
     });
 
     // シンボル配置ボタン

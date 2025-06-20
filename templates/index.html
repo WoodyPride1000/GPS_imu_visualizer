@@ -1,104 +1,116 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS/IMU 可視化システム</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhfR57tMhR+FpDvGgJLk緒zblxSsHYigT2FM="
+        crossorigin=""/>
+    <!-- Chart.js CSS (CDNがないため、必要であればカスタムスタイルを適用) -->
+
+    <!-- カスタムCSS (styles.cssを読み込む) -->
     <link rel="stylesheet" href="/static/styles.css" />
-    
 </head>
 <body>
-    <!-- リアルタイム情報表示ボックス -->
-    <div class="info-box overlay-box">
-        <div>緯度: <span id="baseLat">--</span></div>
-        <div>経度: <span id="baseLon">--</span></div>
-        <div>HDOP（基準局）: <span id="hdopBase">--</span></div>
-        <div>HDOP（移動局）: <span id="hdopRover">--</span></div>
-        <div>品質（基準局）: <span id="qualityBase">--</span></div>
-        <div>品質（移動局）: <span id="qualityRover">--</span></div>
-        <div>方位角（融合）: <span id="headingFused">--</span>°</div>
-        <div>方位角（GPS）: <span id="headingGPS">--</span>°</div>
+    <div id="map"></div>
+
+    <!-- 情報表示ボックス -->
+    <div class="overlay-box info-box">
+        <h3>センサー情報</h3>
+        <div>基準局緯度: <span id="baseLat">--</span></div>
+        <div>基準局経度: <span id="baseLon">--</span></div>
+        <div>HDOP (基準): <span id="hdopBase">--</span></div>
+        <div>HDOP (移動): <span id="hdopRover">--</span></div>
+        <div>品質 (基準): <span id="qualityBase">--</span></div>
+        <div>品質 (移動): <span id="qualityRover">--</span></div>
+        <div>融合方位角: <span id="headingFused">--</span>°</div>
+        <div>GPS方位角: <span id="headingGPS">--</span>°</div>
         <div>方位角ずれ: <span id="headingDiff">--</span>°</div>
         <div>基線長: <span id="distance">--</span> m</div>
-        <div>基線誤差: <span id="error">--</span> m</div>
-        <div>IMU使用: <span id="imuStatus">--</span></div>
-        <div>IMU Z軸角速度: <span id="imuRawGyroZ">--</span> °/s</div>
-        <div>ジャイロZオフセット: <span id="gyroZOffset">--</span> °/s</div>
-        <div id="baseConnected">基準局接続: <span class="status-ng">切断</span></div>
-        <div id="roverConnected">移動局接続: <span class="status-ng">切断</span></div>
+        <div>誤差: ±<span id="error">--</span> m</div>
+        <div>IMU: <span id="imuStatus">OFF</span></div>
+        <div>ジャイロZ軸 (平均): <span id="imuRawGyroZ">--</span>°/s</div>
+        <div>ジャイロZオフセット: <span id="gyroZOffset">--</span>°/s</div>
+        <div id="baseConnected">基準局接続: <span>切断</span></div>
+        <div id="roverConnected">移動局接続: <span>切断</span></div>
         <div>基準局ポートエラー: <span id="basePortErrors">0</span></div>
         <div>基準局シリアルエラー: <span id="baseSerialErrors">0</span></div>
         <div>移動局ポートエラー: <span id="roverPortErrors">0</span></div>
         <div>移動局シリアルエラー: <span id="roverSerialErrors">0</span></div>
-        <div>ダミーモード: <span id="dummyMode">--</span></div>
-        <div>ログレベル: <span id="logLevel">--</span></div>
-        <div id="status-message" style="color: blue; font-weight: bold; grid-column: 1 / span 2;"></div>
+        <div>ダミーモード: <span id="dummyMode">OFF</span></div>
+        <div>ログレベル: <span id="logLevel">INFO</span></div>
     </div>
 
     <!-- コントロールボックス -->
-    <div class="control-box overlay-box">
+    <div class="overlay-box control-box">
+        <h3>コントロール</h3>
         <label>
-            <input type="checkbox" id="followMapCheckbox" checked aria-label="地図追従を有効にする">
-            地図追従
+            <input type="checkbox" id="followMapCheckbox" checked> 地図追従
         </label>
         <label>
-            <input type="checkbox" id="gridCheckbox" checked aria-label="グリッド線を表示する">
-            グリッド線表示
+            <input type="checkbox" id="gridCheckbox"> グリッド表示
         </label>
-        <label for="coordSystemSelect">座標系:</label>
-        <select id="coordSystemSelect" aria-label="座標系の選択">
-            <option value="wgs84">緯度経度</option>
-            <option value="utm">UTM</option>
-            <option value="jgd2011">平面直角座標</option>
-        </select>
+        <div>
+            <label for="coordSystemSelect">座標系:</label>
+            <select id="coordSystemSelect">
+                <option value="wgs84">WGS84 (緯度経度)</option>
+                <option value="utm">UTM</option>
+                <option value="jgd2011">平面直角座標系 (JGD2011)</option>
+            </select>
+        </div>
         <button id="calibrateButton">IMUキャリブレーション開始</button>
-        <label for="logLevelSelect">ログレベル:</label>
-        <select id="logLevelSelect" aria-label="ログレベル選択">
+        <button id="setLogLevelButton">ログレベル設定</button>
+        <select id="logLevelSelect">
             <option value="DEBUG">DEBUG</option>
             <option value="INFO" selected>INFO</option>
             <option value="WARNING">WARNING</option>
             <option value="ERROR">ERROR</option>
             <option value="CRITICAL">CRITICAL</option>
         </select>
-        <button id="setLogLevelButton">ログレベル設定</button>
-        <button id="nmeaToggleButton">NMEA表示 ON/OFF</button>
+        <button id="nmeaToggleButton">NMEA表示切替</button>
         <button id="placeSymbolButton">シンボル配置</button>
     </div>
 
-    <!-- スライダーボックス -->
-    <div class="slider-box overlay-box">
-        <label for="fanSlider">角度幅: <span id="fanValue">45</span>°</label><br>
-        <input type="range" id="fanSlider" min="0" max="90" value="45" aria-label="扇形の角度を調整">
+    <!-- 角度幅スライダーボックス -->
+    <div class="overlay-box slider-box">
+        <h3>扇形（ファン）角度</h3>
+        <input type="range" id="fanSlider" min="1" max="180" value="30">
+        <div>角度幅: <span id="fanValue">30</span>°</div>
     </div>
 
-    <!-- グラフコンテナ -->
-    <div id="graph-container" class="overlay-box">
+    <!-- グラフ表示コンテナ -->
+    <div class="overlay-box" id="graph-container">
         <h3>IMU Z軸安定度 (方位角別)</h3>
         <canvas id="azimuthChart"></canvas>
     </div>
 
     <!-- NMEA表示コンテナ -->
-    <div id="nmea-container" class="overlay-box">
+    <div class="overlay-box" id="nmea-container">
         <h3>NMEAデータ</h3>
         <textarea id="nmea-output" readonly></textarea>
     </div>
 
-    <!-- シンボル情報コンテナ -->
-    <div id="symbol-info-container" class="overlay-box">
+    <!-- 配置済みシンボル情報コンテナ -->
+    <div class="overlay-box" id="symbol-info-container">
         <h3>配置済みシンボル情報</h3>
         <ul id="symbol-list" class="symbol-list">
-            <!-- シンボル情報がここに動的に追加されます -->
+            <!-- シンボルが追加されるとここに表示されます -->
         </ul>
     </div>
 
-    <!-- 地図コンテナ -->
-    <div id="map"></div>
-
-    <!-- 外部JavaScriptライブラリ -->
-    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js" crossorigin=""></script>
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJEQo/LkWC+aNUNYcWTgJK/E8nHFc="
+        crossorigin=""></script>
+    <!-- proj4.js (座標系変換用) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.7.5/proj4.js"></script>
+    <!-- Leaflet.GeometryUtil (距離計算、方位角計算用) - これが不足していました！ -->
+    <script src="https://cdn.rawgit.com/Leaflet/Leaflet.GeometryUtil/master/src/leaflet.geometryutil.js"></script>
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/leaflet-geometryutil@0.9.1/src/leaflet.geometryutil.js"></script>
-
-
-<script src="/static/script.js"></script>
-    
+    <!-- カスタムJavaScript (script.jsを読み込む) -->
+    <script src="/static/script.js"></script>
 </body>
 </html>

@@ -3,334 +3,683 @@
 // --- APIキーの設定 ---
 // 注意: 実際のAPIキーを直接クライアントサイドに埋め込むのはセキュリティ上推奨されません。
 // 本番環境では、バックエンドでAPIキーを管理し、プロキシ経由でアクセスするなどの対策が必要です。
-const API_KEY = "your_api_key_here"; // config.ini の API_KEY と同じ値に設定してください！
+// config.ini の API_KEY と同じ値に設定してください！
+const API_KEY = "your_api_key_here"; 
+
+// --- グローバル変数と初期化 ---
+let map;
+let baseMarker, roverMarker, headingLine, fanLayer, calculatedHeadingLine;
+let followMap = true;
+let gridLayer;
+let currentCoordSystem = 'wgs84'; // 初期座標系
+let azimuthChart; // Chart.jsインスタンス
+let showNMEA = false; // NMEA表示の状態
+let isPlacingSymbol = false; // シンボル配置モードの状態
+let symbolCounter = 0; // シンボルID用のカウンター
+// customMarkersの要素は { id: string, name: string, lat: number, lon: number, marker: L.Marker, element: HTMLElement } となる
+let customMarkers = []; // 配置されたカスタムマーカーを保存する配列
+
+let chartData = {
+    labels: Array.from({length: 360}, (_, i) => i.toString()), // 0-359
+    datasets: [{
+        label: 'IMU Z軸安定度', // グラフのラベル
+        backgroundColor: 'rgba(75, 192, 192, 0.6)', // 初期色（PolarArea用）
+        borderColor: 'rgba(75, 192, 192, 1)',
+        borderWidth: 1,
+        data: Array(360).fill(-50), // app.pyの初期値に合わせて-50
+    }]
+};
+
+// --- ヘルパー関数 ---
+
+// 角度の差を-180〜180度の範囲に正規化するヘルパー関数
+function normalizeAngleDifference(angle1, angle2) {
+    let diff = angle1 - angle2;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return diff;
+}
 
 // --- 地図の初期化 ---
-// 'map' というIDを持つHTML要素に地図をレンダリング
-const map = L.map('map', {
-    center: [35.75, 139.75], // 初期表示の中心座標 (東京周辺の例)
-    zoom: 15,                // 初期ズームレベル
-    zoomControl: false       // ズームコントロール非表示
-});
+function initMap() {
+    // 東京駅周辺を初期位置として設定
+    const tokyoStationLat = 35.681236;
+    const tokyoStationLon = 139.767125;
 
-// OpenStreetMapのタイルレイヤーを追加
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-}).addTo(map);
+    map = L.map('map').setView([tokyoStationLat, tokyoStationLon], 18); // 初期位置とズームレベル
 
-// GPS位置を表示するマーカーと円
-const baseMarker = L.marker([0, 0]).addTo(map).bindPopup("基準局");
-const roverMarker = L.marker([0, 0], { icon: L.icon({ iconUrl: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTEyIDBMNGQ4IDEwQTMgMyAwIDEgMCAxMiAwem0wIDJhMSAxIDAgMSAwIDAgMnptMCA0YTMgMyAwIDEgMCAwIDZNMTAgMTZhMiAyIDAgMSAwIDAgNGwyIDJaIiBmaWxsPSJibHVlIi8+PC9zdmc+', iconSize: [24, 24], iconAnchor: [12, 24] }) }).addTo(map).bindPopup("移動局");
-const errorCircle = L.circle([0, 0], { color: 'red', fillColor: '#f03', fillOpacity: 0.2, radius: 1 }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
 
-// マーカーを繋ぐ線
-const polyline = L.polyline([[0, 0], [0, 0]], { color: 'blue' }).addTo(map);
+    // 基準局と移動局のマーカーを東京駅の初期位置に設定
+    baseMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "基準局"}).addTo(map).bindPopup("基準局").openPopup();
+    roverMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "移動局"}).addTo(map).bindPopup("移動局").openPopup();
 
-// データを表示する要素への参照
-const latDisplay = document.getElementById('baseLat');
-const lonDisplay = document.getElementById('baseLon');
-const hdopBaseDisplay = document.getElementById('hdopBase');
-const hdopRoverDisplay = document.getElementById('hdopRover');
-const qualityBaseDisplay = document.getElementById('qualityBase');
-const qualityRoverDisplay = document.getElementById('qualityRover');
-const headingDisplay = document.getElementById('heading');
-const errorDisplay = document.getElementById('error');
-const distanceDisplay = document.getElementById('distance');
-const imuStatusDisplay = document.getElementById('imuStatus');
-const imuRawGyroZDisplay = document.getElementById('imuRawGyroZ');
-const gyroZOffsetDisplay = document.getElementById('gyroZOffset');
-const baseConnectedStatus = document.getElementById('baseConnected');
-const roverConnectedStatus = document.getElementById('roverConnected');
-const basePortErrorsDisplay = document.getElementById('basePortErrors');
-const baseSerialErrorsDisplay = document.getElementById('baseSerialErrors');
-const roverPortErrorsDisplay = document.getElementById('roverPortErrors');
-const roverSerialErrorsDisplay = document.getElementById('roverSerialErrors');
-const dummyModeDisplay = document.getElementById('dummyMode');
-const logLevelDisplay = document.getElementById('logLevel');
+    // 方位線と扇形のためのレイヤーグループ
+    headingLine = L.polyline([], { color: 'blue', weight: 3, opacity: 0.7 }).addTo(map);
+    fanLayer = L.polygon([], { color: 'orange', fillOpacity: 0.3, stroke: false }).addTo(map);
 
+    // 算出した方位を示す線 (破線の緑色)
+    calculatedHeadingLine = L.polyline([], { color: 'green', weight: 3, opacity: 0.7, dashArray: '5, 5' }).addTo(map);
+
+    // グリッド線レイヤー
+    gridLayer = L.layerGroup().addTo(map);
+    updateGrid(map.getBounds()); // 初期グリッド表示
+    map.on('moveend', function() {
+        if (document.getElementById('gridCheckbox').checked) {
+            updateGrid(map.getBounds());
+        }
+    });
+
+    // シンボル配置モード時のマップクリックイベント
+    map.on('click', function(e) {
+        if (isPlacingSymbol) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+            symbolCounter++;
+            const symbolId = `symbol-${symbolCounter}`;
+            const symbolName = `地点 ${symbolCounter}`;
+
+            // カスタムアイコンを作成
+            const customIcon = L.divIcon({
+                className: 'custom-symbol-icon',
+                iconSize: [16, 16], // アイコンのサイズ
+                iconAnchor: [8, 8], // アイコンの中心 (アイコンサイズの半分)
+                popupAnchor: [0, -8] // ポップアップのアンカー位置
+            });
+
+            const marker = L.marker([lat, lon], {icon: customIcon}).addTo(map);
+            marker.bindPopup(`<strong>${symbolName}</strong><br>緯度: ${lat.toFixed(7)}<br>経度: ${lon.toFixed(7)}`).openPopup();
+            
+            // シンボル情報表示リストに要素を追加
+            const symbolList = document.getElementById('symbol-list');
+            const listItem = document.createElement('li');
+            listItem.id = `symbol-item-${symbolId}`;
+            listItem.className = 'symbol-item';
+            listItem.innerHTML = `
+                <strong>${symbolName}</strong> 
+                <button class="delete-symbol-button" data-symbol-id="${symbolId}">削除</button><br>
+                緯度: ${lat.toFixed(7)}<br>
+                経度: ${lon.toFixed(7)}<br>
+                基準局からの距離: <span id="dist-${symbolId}">--</span> m<br>
+                基準局からの方位角: <span id="bearing-${symbolId}">--</span> °
+            `;
+            symbolList.appendChild(listItem);
+
+            // 削除ボタンにイベントリスナーを追加
+            listItem.querySelector('.delete-symbol-button').addEventListener('click', (event) => {
+                const idToDelete = event.target.dataset.symbolId;
+                deleteSymbol(idToDelete);
+            });
+
+            customMarkers.push({
+                id: symbolId,
+                name: symbolName,
+                lat: lat,
+                lon: lon,
+                marker: marker,
+                element: listItem // HTML要素への参照を保存
+            });
+            console.log(`シンボルを配置しました: ${symbolName} (緯度 ${lat.toFixed(7)}, 経度 ${lon.toFixed(7)})`);
+        }
+    });
+}
+
+// --- シンボル削除機能 ---
+function deleteSymbol(symbolId) {
+    // customMarkers配列から該当するシンボルを探す
+    const index = customMarkers.findIndex(s => s.id === symbolId);
+    if (index > -1) {
+        const symbolToDelete = customMarkers[index];
+
+        // マップからマーカーを削除
+        map.removeLayer(symbolToDelete.marker);
+
+        // DOMからリストアイテムを削除
+        symbolToDelete.element.remove();
+
+        // customMarkers配列からシンボルを削除
+        customMarkers.splice(index, 1);
+        console.log(`シンボル ${symbolId} を削除しました。`);
+    }
+}
+
+// --- グリッド線機能 ---
+function updateGrid(bounds) {
+    console.log("updateGrid called with bounds:", bounds.toBBoxString());
+    gridLayer.clearLayers();
+    if (!document.getElementById('gridCheckbox').checked) return;
+
+    const zoom = map.getZoom();
+    let intervalLat = 0.01;
+    let intervalLon = 0.01;
+
+    if (zoom >= 17) {
+        intervalLat = 0.001;
+        intervalLon = 0.001;
+    } else if (zoom >= 15) {
+        intervalLat = 0.005;
+        intervalLon = 0.005;
+    } else if (zoom >= 13) {
+        intervalLat = 0.01;
+        intervalLon = 0.01;
+    } else {
+        intervalLat = 0.05;
+        intervalLon = 0.05;
+    }
+
+    const latMin = Math.floor(bounds.getSouthWest().lat / intervalLat) * intervalLat;
+    const latMax = Math.ceil(bounds.getNorthEast().lat / intervalLat) * intervalLat;
+    const lonMin = Math.floor(bounds.getSouthWest().lng / intervalLon) * intervalLon;
+    const lonMax = Math.ceil(bounds.getNorthEast().lng / intervalLon) * intervalLon;
+
+    for (let lat = latMin; lat <= latMax; lat += intervalLat) {
+        L.polyline([[lat, lonMin], [lat, lonMax]], { color: '#ccc', weight: 0.5, opacity: 0.6, dashArray: '2, 4' }).addTo(gridLayer);
+    }
+    for (let lon = lonMin; lon <= lonMax; lon += intervalLon) {
+        L.polyline([[latMin, lon], [latMax, lon]], { color: '#ccc', weight: 0.5, opacity: 0.6, dashArray: '2, 4' }).addTo(gridLayer);
+    }
+}
+
+// --- 座標変換機能 ---
+// UTM (Zone 54N for Tokyo)
+proj4.defs("EPSG:32654", "+proj=utm +zone=54 +datum=WGS84 +units=m +no_defs");
+// 平面直角座標系 (JGD2011, 系9 for Kanto)
+proj4.defs("JGD2011_PLANE_9", "+proj=tmerc +lat_0=36 +lon_0=139.8333333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+
+function convertCoordinates(lat, lon, targetSystem) {
+    if (targetSystem === 'wgs84') {
+        return { lat, lon, text: `緯度: ${lat.toFixed(7)}, 経度: ${lon.toFixed(7)}` };
+    } else if (targetSystem === 'utm') {
+        if (typeof proj4 === 'undefined') {
+            console.error("proj4.jsがロードされていません。UTM変換は利用できません。");
+            return { lat, lon, text: `緯度: ${lat.toFixed(7)}, 経度: ${lon.toFixed(7)} (UTM変換エラー)` };
+        }
+        const utm = proj4("EPSG:4326", "EPSG:32654", [lon, lat]);
+        return { x: utm[0], y: utm[1], text: `UTM-X: ${utm[0].toFixed(2)}, UTM-Y: ${utm[1].toFixed(2)}` };
+    } else if (targetSystem === 'jgd2011') {
+            if (typeof proj4 === 'undefined') {
+            console.error("proj4.jsがロードされていません。JGD2011変換は利用できません。");
+            return { lat, lon, text: `緯度: ${lat.toFixed(7)}, 経度: ${lon.toFixed(7)} (JGD2011変換エラー)` };
+        }
+        const jgd = proj4("EPSG:4326", "JGD2011_PLANE_9", [lon, lat]);
+        return { x: jgd[0], y: jgd[1], text: `X: ${jgd[0].toFixed(2)}, Y: ${jgd[1].toFixed(2)} (系9)` };
+    }
+    return { lat, lon, text: `緯度: ${lat.toFixed(7)}, 経度: ${lon.toFixed(7)}` }; // Fallback
+}
 
 // --- Chart.js グラフの初期化 ---
-const ctx = document.getElementById('azimuthChart').getContext('2d');
-let azimuthChart; // 後でChartオブジェクトを保持するための変数
-
-// グラフデータを取得し、Chart.jsを初期化する関数
-async function initAzimuthChart() {
-    try {
-        const response = await fetch('/api/graph_data', {
-            headers: { 'X-API-KEY': API_KEY }
-        });
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-
-        azimuthChart = new Chart(ctx, {
-            type: 'polarArea', // Polar Area chart
-            data: {
-                labels: data.azimuths.map(a => `${a}°`), // 0°から359°のラベル
-                datasets: [{
-                    label: '方位角別データ',
-                    data: data.values,
-                    backgroundColor: data.values.map(val => {
-                        // 値に応じて色を変える例 (適宜調整)
-                        if (val > -30) return 'rgba(75, 192, 192, 0.6)'; // 良い値
-                        if (val > -60) return 'rgba(255, 206, 86, 0.6)'; // 普通
-                        return 'rgba(255, 99, 132, 0.6)'; // 悪い値
-                    }),
-                    borderColor: data.values.map(val => {
-                        if (val > -30) return 'rgba(75, 192, 192, 1)';
-                        if (val > -60) return 'rgba(255, 206, 86, 1)';
-                        return 'rgba(255, 99, 132, 1)';
-                    }),
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scale: {
-                    r: {
-                        angleLines: {
-                            display: true
-                        },
-                        suggestedMin: -100, // グラフの最小値
-                        suggestedMax: 0,  // グラフの最大値
-                        pointLabels: {
-                            display: true, // 方位角ラベルを表示
-                            centerPointLabels: true // ラベルを中央に表示
-                        },
-                        ticks: {
-                            stepSize: 20 // 目盛りのステップサイズ
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: false // 凡例は表示しない
+function initChart() {
+    const ctx = document.getElementById('azimuthChart').getContext('2d');
+    azimuthChart = new Chart(ctx, {
+        type: 'polarArea', // ご提示の script.js に合わせて Polar Area Chart
+        data: chartData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scale: {
+                r: {
+                    angleLines: {
+                        display: true
                     },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return `方位角 ${context.label}: ${context.raw.toFixed(2)}`;
-                            }
+                    suggestedMin: -100, // グラフの最小値
+                    suggestedMax: 0,  // グラフの最大値
+                    pointLabels: {
+                        display: true, // 方位角ラベルを表示
+                        centerPointLabels: true // ラベルを中央に表示
+                    },
+                    ticks: {
+                        stepSize: 20 // 目盛りのステップサイズ
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false // 凡例は表示しない
+                },
+                title: {
+                    display: true,
+                    text: 'IMU Z軸安定度 (方位角別)'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `方位角 ${context.label}: ${context.raw.toFixed(2)}`;
                         }
                     }
                 }
+            },
+            animation: {
+                duration: 0 // アニメーションなしで即時更新
             }
-        });
-    } catch (error) {
-        console.error("グラフの初期化エラー:", error);
-    }
-}
-
-
-// --- 座標系変換のための Proj4js の設定 ---
-// ここに日本の平面直角座標系などの定義を追加します
-// 例: 平面直角座標系 第IX系 (JGD2011)
-proj4.defs(
-    "JGD2011_IX",
-    "+proj=tmerc +lat_0=36 +lon_0=139.8333333333333 +k=0.9999 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
-);
-// 必要に応じて他の系も追加してください
-
-// 現在の座標系を保持する変数
-let currentCoordSystem = 'wgs84'; // デフォルトは緯度経度
-
-// 座標系セレクタの変更イベントリスナー
-document.getElementById('coordSystemSelect').addEventListener('change', function(e) {
-    currentCoordSystem = e.target.value;
-    updateMapAndDisplay(
-        currentCoordSystem,
-        parseFloat(latDisplay.textContent), // 現在表示されている値を再利用
-        parseFloat(lonDisplay.textContent)
-    );
-});
-
-// 地図を更新し、表示を切り替える関数
-function updateMapAndDisplay(coordSystem, lat, lon) {
-    let displayLat = lat.toFixed(7);
-    let displayLon = lon.toFixed(7);
-
-    if (coordSystem === 'utm') {
-        // UTM変換 (簡易的な例、ゾーンの決定は実際にはより複雑)
-        const utmZone = Math.floor((lon + 180) / 6) + 1;
-        const utmResult = proj4(`EPSG:4326`, `EPSG:326${utmZone}`, [lon, lat]); // EPSG:326XX は北半球UTM
-        displayLat = utmResult[1].toFixed(3) + 'm';
-        displayLon = utmResult[0].toFixed(3) + 'm';
-    } else if (coordSystem === 'jgd2011') {
-        // 平面直角座標系 第IX系への変換例
-        // ここでは便宜上、JGD2011_IXを直接使用していますが、
-        // 実際にはGPSの緯度経度 (WGS84) からJGD2011緯度経度に変換し、
-        // それから平面直角座標系に変換するのが正しい手順です。
-        // 簡単化のため、WGS84をJGD2011と同じとして変換します。
-        try {
-            const jgd2011Result = proj4(`EPSG:4326`, `JGD2011_IX`, [lon, lat]);
-            displayLon = jgd2011Result[0].toFixed(3) + 'm'; // X
-            displayLat = jgd2011Result[1].toFixed(3) + 'm'; // Y
-        } catch (e) {
-            console.error("平面直角座標系変換エラー:", e);
-            displayLat = 'N/A';
-            displayLon = 'N/A';
         }
-    }
-
-    latDisplay.textContent = `緯度: ${displayLat}`;
-    lonDisplay.textContent = `経度: ${displayLon}`;
+    });
 }
 
+// --- ファン形状 (扇形) の更新 ---
+function updateFan(lat, lon, heading, angleWidth) {
+    // 方位角 (heading) は北を0°として時計回り (0-360)
+    // angleWidth は扇形の中心から左右への角度 (例えば45°なら全体で90°)
+    // Leaflet.GeometryUtil.destination を使用
 
-// --- APIからのデータ取得とUI更新 ---
-async function fetchData() {
+    const center = L.latLng(lat, lon);
+    // 扇形の半径をメートル単位で指定 (例: 50メートル)
+    const radiusMeters = 50; 
+
+    const points = [center];
+    const startAngle = (heading - angleWidth / 2 + 360) % 360;
+    const endAngle = (heading + angleWidth / 2 + 360) % 360;
+
+    const numSegments = 30; // 扇形を構成するセグメント数
+    for (let i = 0; i <= numSegments; i++) {
+        const angle = startAngle + (endAngle - startAngle) * i / numSegments;
+        // L.GeometryUtil.destination(origin, bearing, distance)
+        const point = L.GeometryUtil.destination(center, angle, radiusMeters);
+        points.push(point);
+    }
+    points.push(center); // 閉じたポリゴンにするために中心に戻る
+
+    fanLayer.setLatLngs(points);
+}
+
+// --- APIからのデータ取得とUI更新 (メインループ) ---
+async function fetchSensorData() {
     try {
-        const response = await fetch('/api/position', {
+        const response = await fetch(window.location.origin + '/api/position', {
             headers: { 'X-API-KEY': API_KEY }
         });
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errorStatus = response.status;
+            const errorText = await response.text();
+            let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
+            if (errorStatus === 401) {
+                errorMessage = "認証エラー: APIキーが不正です。";
+            } else if (errorStatus === 404) {
+                errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
+            }
+            throw new Error(errorMessage);
         }
         const data = await response.json();
 
-        // UIの更新
-        latDisplay.textContent = `緯度: ${data.lat}`;
-        lonDisplay.textContent = `経度: ${data.lon}`;
-        hdopBaseDisplay.textContent = `HDOP (基準): ${data.hdop_base}`;
-        hdopRoverDisplay.textContent = `HDOP (移動): ${data.hdop_rover}`;
-        qualityBaseDisplay.textContent = `品質 (基準): ${data.base_quality}`;
-        qualityRoverDisplay.textContent = `品質 (移動): ${data.rover_quality}`;
-        headingDisplay.textContent = `方位角: ${data.heading.toFixed(2)}°`;
-        errorDisplay.textContent = `誤差: ±${data.error.toFixed(3)}m`;
-        distanceDisplay.textContent = `距離: ${data.distance.toFixed(3)}m`;
-        imuStatusDisplay.textContent = `IMU: ${data.imu ? '動作中' : '停止'}`;
-        imuRawGyroZDisplay.textContent = `ジャイロZ (平均): ${data.imu_raw_gyro_z.toFixed(5)}°/s`;
-        gyroZOffsetDisplay.textContent = `ジャイロZオフセット: ${data.gyro_z_offset.toFixed(5)}°/s`;
+        // GPSデータの更新
+        const baseLat = data.lat;
+        const baseLon = data.lon;
+        const roverLat = data.rover_lat;
+        const roverLon = data.rover_lon; 
 
-        baseConnectedStatus.textContent = `基準局接続: ${data.base_connected ? 'はい' : 'いいえ'}`;
-        baseConnectedStatus.className = data.base_connected ? 'status-ok' : 'status-ng';
-        roverConnectedStatus.textContent = `移動局接続: ${data.rover_connected ? 'はい' : 'いいえ'}`;
-        roverConnectedStatus.className = data.rover_connected ? 'status-ok' : 'status-ng';
-        basePortErrorsDisplay.textContent = `基準局ポートエラー: ${data.base_port_errors}`;
-        baseSerialErrorsDisplay.textContent = `基準局シリアルエラー: ${data.base_serial_errors}`;
-        roverPortErrorsDisplay.textContent = `移動局ポートエラー: ${data.rover_port_errors}`;
-        roverSerialErrorsDisplay.textContent = `移動局シリアルエラー: ${data.rover_serial_errors}`;
-        dummyModeDisplay.textContent = `ダミーモード: ${data.dummy_mode ? 'はい' : 'いいえ'}`;
-        logLevelDisplay.textContent = `ログレベル: ${data.log_level}`;
+        baseMarker.setLatLng([baseLat, baseLon]);
+        roverMarker.setLatLng([roverLat, roverLon]);
 
-        // 地図とマーカーの更新
-        if (data.lat !== 0.0 || data.lon !== 0.0) {
-            baseMarker.setLatLng([data.lat, data.lon]);
-            errorCircle.setLatLng([data.lat, data.lon]).setRadius(data.error);
+        // 方位線の更新 (基準局と移動局を結ぶ線 - 青色)
+        const linePoints = [[baseLat, baseLon], [roverLat, roverLon]];
+        headingLine.setLatLngs(linePoints);
 
-            if (data.rover_lat !== 0.0 || data.rover_lon !== 0.0) {
-                roverMarker.setLatLng([data.rover_lat, data.rover_lon]);
-                polyline.setLatLngs([[data.lat, data.lon], [data.rover_lat, data.rover_lon]]);
-                
-                // 地図の中心を両方のマーカーの中間に設定し、ズームを調整
-                const group = new L.featureGroup([baseMarker, roverMarker]);
-                map.fitBounds(group.getBounds().pad(0.5)); // padding to show markers fully
-            } else {
-                roverMarker.setLatLng([data.lat, data.lon]); // 基準局と同じ位置に表示
-                polyline.setLatLngs([[data.lat, data.lon], [data.lat, data.lon]]);
-                map.setView([data.lat, data.lon], map.getZoom()); // 基準局を中心に
-            }
-            updateMapAndDisplay(currentCoordSystem, data.lat, data.lon); // 選択された座標系で表示
+        // 扇形の更新
+        const fanValue = parseFloat(document.getElementById('fanSlider').value);
+        const headingFused = data.heading; // 融合方位角
+        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
+            updateFan(roverLat, roverLon, headingFused, fanValue);
         } else {
-            // データがまだ取得できていない場合、マーカーを非表示にするか、初期位置に戻す
-            // baseMarker.setLatLng([0,0]);
-            // roverMarker.setLatLng([0,0]);
-            // errorCircle.setLatLng([0,0]).setRadius(1);
-            // polyline.setLatLngs([[0,0],[0,0]]);
+            console.warn("L.GeometryUtil.destination が利用できないため、扇形は描画されません。");
         }
+
+        // 算出した方位を示す線の更新 (画面サイズの30%の長さで表示 - 緑色破線)
+        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
+            const baseLatLngForCalculatedLine = L.latLng(baseLat, baseLon);
+            const bounds = map.getBounds();
+            const visibleHeightMeters = map.distance(bounds.getNorthWest(), L.latLng(bounds.getSouthWest().lat, bounds.getNorthWest().lng));
+            const visibleWidthMeters = map.distance(bounds.getNorthWest(), bounds.getNorthEast());
+            const dynamicLineLengthMeters = Math.min(visibleHeightMeters, visibleWidthMeters) * 0.30;
+            
+            const calculatedLineDestination = L.GeometryUtil.destination(baseLatLngForCalculatedLine, headingFused, dynamicLineLengthMeters);
+            calculatedHeadingLine.setLatLngs([baseLatLngForCalculatedLine, calculatedLineDestination]);
+        }
+
+        // 地図の追従
+        if (document.getElementById('followMapCheckbox').checked) { // followMap変数ではなくチェックボックスの状態を見る
+            map.setView([baseLat, baseLon], map.getZoom());
+        }
+
+        // Info Boxの更新
+        const convertedBase = convertCoordinates(baseLat, baseLon, currentCoordSystem);
+        // latDisplay と lonDisplay は直接 convertedBase の text プロパティを使用
+        document.getElementById('baseLat').textContent = convertedBase.text.split(',')[0].trim();
+        document.getElementById('baseLon').textContent = convertedBase.text.split(',')[1] ? convertedBase.text.split(',')[1].trim() : '';
+
+        document.getElementById('hdopBase').textContent = data.hdop_base;
+        document.getElementById('hdopRover').textContent = data.hdop_rover;
+        document.getElementById('qualityBase').textContent = data.base_quality;
+        document.getElementById('qualityRover').textContent = data.rover_quality;
+        document.getElementById('headingFused').textContent = data.heading.toFixed(2); // 融合方位角
+        document.getElementById('headingGPS').textContent = data.heading_gps.toFixed(2); // GPS方位角
         
-        // グラフデータの更新
-        // Chart.jsでデータセットを更新
-        if (azimuthChart) {
-            // 新しいグラフデータをAPIから取得し、チャートを更新
-            const graphResponse = await fetch('/api/graph_data', {
-                headers: { 'X-API-KEY': API_KEY }
+        // 方位角のずれ量の計算と表示
+        const headingDiff = normalizeAngleDifference(data.heading, data.heading_gps);
+        document.getElementById('headingDiff').textContent = headingDiff.toFixed(2);
+
+        document.getElementById('distance').textContent = data.distance.toFixed(3);
+        document.getElementById('error').textContent = data.error.toFixed(3);
+        
+        document.getElementById('imuStatus').textContent = data.imu ? 'ON' : 'OFF';
+        document.getElementById('imuStatus').className = data.imu ? 'status-ok' : 'status-ng';
+
+        document.getElementById('imuRawGyroZ').textContent = data.imu_raw_gyro_z.toFixed(5);
+        document.getElementById('gyroZOffset').textContent = data.gyro_z_offset.toFixed(5);
+        
+        document.getElementById('baseConnected').querySelector('span').className = data.base_connected ? 'status-ok' : 'status-ng';
+        document.getElementById('baseConnected').querySelector('span').textContent = data.base_connected ? '接続中' : '切断';
+        
+        document.getElementById('roverConnected').querySelector('span').className = data.rover_connected ? 'status-ok' : 'status-ng';
+        document.getElementById('roverConnected').querySelector('span').textContent = data.rover_connected ? '接続中' : '切断';
+        
+        document.getElementById('basePortErrors').textContent = data.base_port_errors;
+        document.getElementById('baseSerialErrors').textContent = data.base_serial_errors;
+        document.getElementById('roverPortErrors').textContent = data.rover_port_errors;
+        document.getElementById('roverSerialErrors').textContent = data.rover_serial_errors;
+
+        document.getElementById('dummyMode').querySelector('span').textContent = data.dummy_mode ? 'ON' : 'OFF';
+        document.getElementById('logLevel').querySelector('span').textContent = data.log_level;
+
+        document.getElementById('status-message').textContent = ""; // エラーメッセージをクリア (成功時)
+
+        // シンボルリストの情報を更新
+        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.distance && L.GeometryUtil.bearing) {
+            const baseLatLng = L.latLng(baseLat, baseLon);
+            customMarkers.forEach(symbol => {
+                const symbolLatLng = L.latLng(symbol.lat, symbol.lon);
+                const distanceToBase = L.GeometryUtil.distance(baseLatLng, symbolLatLng);
+                const bearingToBase = L.GeometryUtil.bearing(baseLatLng, symbolLatLng);
+
+                document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
+                document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);
             });
-            if (graphResponse.ok) {
-                const graphData = await graphResponse.json();
-                azimuthChart.data.labels = graphData.azimuths.map(a => `${a}°`);
-                azimuthChart.data.datasets[0].data = graphData.values;
-                azimuthChart.data.datasets[0].backgroundColor = graphData.values.map(val => {
-                    if (val > -30) return 'rgba(75, 192, 192, 0.6)';
-                    if (val > -60) return 'rgba(255, 206, 86, 0.6)';
-                    return 'rgba(255, 99, 132, 0.6)';
-                });
-                azimuthChart.data.datasets[0].borderColor = graphData.values.map(val => {
-                    if (val > -30) return 'rgba(75, 192, 192, 1)';
-                    if (val > -60) return 'rgba(255, 206, 86, 1)';
-                    return 'rgba(255, 99, 132, 1)';
-                });
-                azimuthChart.update();
-            }
+        } else {
+            console.warn("L.GeometryUtilが利用できないため、シンボル情報の距離・方位角は更新されません。");
         }
 
     } catch (error) {
-        console.error("データの取得エラー:", error);
-        // エラー発生時のUIフィードバック
-        baseConnectedStatus.textContent = `基準局接続: エラー`;
-        baseConnectedStatus.className = 'status-ng';
-        roverConnectedStatus.textContent = `移動局接続: エラー`;
-        roverConnectedStatus.className = 'status-ng';
-        imuStatusDisplay.textContent = `IMU: エラー`;
+        console.error("センサーデータの取得中にエラー:", error);
+        const statusMessageElement = document.getElementById('status-message');
+        let message = `エラー: ${error.message}`;
+        let color = 'orange';
+
+        if (error instanceof TypeError && error.message.includes("Failed to fetch")) {
+            message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("HTTPエラー: 404")) {
+            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
+            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+            color = 'red';
+        }
+        
+        statusMessageElement.textContent = message;
+        statusMessageElement.style.color = color;
+
+        // エラー時は接続ステータスをNGにする
+        document.getElementById('baseConnected').querySelector('span').className = 'status-ng';
+        document.getElementById('baseConnected').querySelector('span').textContent = '切断';
+        document.getElementById('roverConnected').querySelector('span').className = 'status-ng';
+        document.getElementById('roverConnected').querySelector('span').textContent = '切断';
+        document.getElementById('imuStatus').className = 'status-ng';
+        document.getElementById('imuStatus').textContent = 'OFF';
     }
 }
 
-// --- イベントリスナーと初期化 ---
-
-// IMUキャリブレーションボタン
-document.getElementById('calibrateButton').addEventListener('click', async function() {
-    const action = this.textContent === 'キャリブレーション開始' ? 'start' : 'stop';
+// --- グラフデータの取得と更新 ---
+async function fetchGraphData() {
     try {
-        const response = await fetch('/api/calibrate_imu', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-KEY': API_KEY
-            },
-            body: JSON.stringify({ action: action })
+        const response = await fetch(window.location.origin + '/api/graph_data', {
+            headers: { 'X-API-KEY': API_KEY }
         });
-        const result = await response.json();
-        alert(result.status);
-        if (action === 'start') {
-            this.textContent = 'キャリブレーション停止';
-        } else {
-            this.textContent = 'キャリブレーション開始';
-            gyroZOffsetDisplay.textContent = `ジャイロZオフセット: ${result.offset.toFixed(5)}°/s`;
+        if (!response.ok) {
+            const errorStatus = response.status;
+            const errorText = await response.text();
+            let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
+            if (errorStatus === 401) {
+                errorMessage = "認証エラー: APIキーが不正です。";
+            } else if (errorStatus === 404) {
+                errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
+            }
+            throw new Error(errorMessage);
         }
-    } catch (error) {
-        console.error("IMUキャリブレーションエラー:", error);
-        alert("IMUキャリブレーションに失敗しました。");
-    }
-});
-
-// ログレベル設定ボタン
-document.getElementById('setLogLevelButton').addEventListener('click', async function() {
-    const logLevel = document.getElementById('logLevelSelect').value;
-    try {
-        const response = await fetch('/api/set_log_level', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-KEY': API_KEY
-            },
-            body: JSON.stringify({ level: logLevel })
+        const data = await response.json();
+        chartData.datasets[0].data = data.values;
+        // PolarArea Chartの背景色とボーダー色をデータに応じて更新
+        chartData.datasets[0].backgroundColor = data.values.map(val => {
+            if (val > -30) return 'rgba(75, 192, 192, 0.6)'; // 良い値
+            if (val > -60) return 'rgba(255, 206, 86, 0.6)'; // 普通
+            return 'rgba(255, 99, 132, 0.6)'; // 悪い値
         });
-        const result = await response.json();
-        alert(result.status);
-        logLevelDisplay.textContent = `ログレベル: ${logLevel}`;
+        chartData.datasets[0].borderColor = data.values.map(val => {
+            if (val > -30) return 'rgba(75, 192, 192, 1)';
+            if (val > -60) return 'rgba(255, 206, 86, 1)';
+            return 'rgba(255, 99, 132, 1)';
+        });
+        azimuthChart.update(); // グラフを更新
     } catch (error) {
-        console.error("ログレベル設定エラー:", error);
-        alert("ログレベル設定に失敗しました。");
+        console.error("グラフデータの取得中にエラー:", error);
+        // グラフ取得エラーの場合もステータスメッセージを更新
+        const statusMessageElement = document.getElementById('status-message');
+        let message = `グラフデータの取得中にエラー: ${error.message}`;
+        let color = 'orange';
+
+        if (error instanceof TypeError && error.message.includes("Failed to fetch")) {
+            message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("HTTPエラー: 404")) {
+            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
+            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+            color = 'red';
+        }
+
+        statusMessageElement.textContent = message;
+        statusMessageElement.style.color = color;
     }
-});
+}
+
+// --- NMEAデータの取得と表示 ---
+async function fetchNMEAData() {
+    if (!showNMEA) return; // 表示がOFFなら何もしない
+    try {
+        const response = await fetch(window.location.origin + '/api/nmea_data', {
+            headers: { 'X-API-KEY': API_KEY }
+        });
+        if (!response.ok) {
+            const errorStatus = response.status;
+            const errorText = await response.text();
+            let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
+            if (errorStatus === 401) {
+                errorMessage = "認証エラー: APIキーが不正です。";
+            } else if (errorStatus === 404) {
+                errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
+            }
+            throw new Error(errorMessage);
+        }
+        const data = await response.json();
+        const nmeaOutput = document.getElementById('nmea-output');
+        nmeaOutput.value = data.nmea_lines.join('\n'); // 配列を行ごとに結合
+        nmeaOutput.scrollTop = nmeaOutput.scrollHeight; // 最下部にスクロール
+    } catch (error) {
+        console.error("NMEAデータの取得中にエラー:", error);
+        // NMEAデータ取得エラーの場合もステータスメッセージを更新
+        const statusMessageElement = document.getElementById('status-message');
+        let message = `NMEAデータの取得中にエラー: ${error.message}`;
+        let color = 'orange';
+
+        if (error instanceof TypeError && error.message.includes("Failed to fetch")) {
+            message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("HTTPエラー: 404")) {
+            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            color = 'red';
+        } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
+            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+            color = 'red';
+        }
+
+        statusMessageElement.textContent = message;
+        statusMessageElement.style.color = color;
+    }
+}
 
 
-// ページ読み込み時にグラフを初期化
+// --- イベントリスナー ---
 document.addEventListener('DOMContentLoaded', () => {
-    initAzimuthChart();
-    fetchData(); // 初回データ取得
-    setInterval(fetchData, 500); // 0.5秒ごとにデータを更新
+    initMap();
+    initChart(); // Chart.jsの初期化
+    setInterval(fetchSensorData, 1000); // 1秒ごとにデータ更新
+    setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新
+    setInterval(fetchNMEAData, 500); // 0.5秒ごとにNMEAデータ更新 (高頻度)
+
+    // 地図追従チェックボックス
+    document.getElementById('followMapCheckbox').addEventListener('change', (e) => {
+        followMap = e.target.checked; // この変数は使ってないが念のため維持
+    });
+
+    // グリッド線表示チェックボックス
+    document.getElementById('gridCheckbox').addEventListener('change', (e) => {
+        if (e.target.checked) {
+            updateGrid(map.getBounds());
+        } else {
+            gridLayer.clearLayers();
+        }
+    });
+
+    // 座標系セレクタ
+    document.getElementById('coordSystemSelect').addEventListener('change', (e) => {
+        currentCoordSystem = e.target.value;
+        fetchSensorData(); // 座標系が変更されたら表示を更新するために、すぐにデータ取得をトリガー
+    });
+
+    // IMUキャリブレーションボタン
+    document.getElementById('calibrateButton').addEventListener('click', async () => {
+        const button = document.getElementById('calibrateButton');
+        let action = '';
+        if (button.classList.contains('calibrating')) {
+            action = 'stop';
+            button.classList.remove('calibrating');
+            button.textContent = 'IMUキャリブレーション開始';
+        } else {
+            action = 'start';
+            button.classList.add('calibrating');
+            button.textContent = 'キャリブレーション停止';
+        }
+        
+        try {
+            const response = await fetch(window.location.origin + '/api/calibrate_imu', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-KEY': API_KEY
+                },
+                body: JSON.stringify({ action: action })
+            });
+            if (!response.ok) {
+                const errorStatus = response.status;
+                const errorText = await response.text();
+                let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
+                if (errorStatus === 401) {
+                    errorMessage = "認証エラー: APIキーが不正です。";
+                } else if (errorStatus === 404) {
+                    errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
+                }
+                throw new Error(errorMessage);
+            }
+            const result = await response.json();
+            document.getElementById('status-message').textContent = `キャリブレーション: ${result.status}`;
+            if (result.offset !== undefined) {
+                document.getElementById('status-message').textContent += ` オフセット: ${result.offset.toFixed(5)}`;
+            }
+            document.getElementById('status-message').style.color = 'blue';
+        } catch (error) {
+            console.error("キャリブレーションAPIエラー:", error);
+            document.getElementById('status-message').textContent = `キャリブレーションエラー: ${error.message}`;
+            document.getElementById('status-message').style.color = 'red';
+            // エラー時は元の状態に戻す
+            if (action === 'start') {
+                button.classList.remove('calibrating');
+                button.textContent = 'IMUキャリブレーション開始';
+            } else {
+                button.classList.add('calibrating');
+                button.textContent = 'キャリブレーション停止';
+            }
+        }
+    });
+
+    // ログレベル設定ボタン
+    document.getElementById('setLogLevelButton').addEventListener('click', async () => {
+        const logLevel = document.getElementById('logLevelSelect').value;
+        try {
+            const response = await fetch(window.location.origin + '/api/set_log_level', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-KEY': API_KEY
+                },
+                body: JSON.stringify({ level: logLevel })
+            });
+            if (!response.ok) {
+                const errorStatus = response.status;
+                const errorText = await response.text();
+                let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
+                if (errorStatus === 401) {
+                    errorMessage = "認証エラー: APIキーが不正です。";
+                } else if (errorStatus === 404) {
+                    errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
+                }
+                throw new Error(errorMessage);
+            }
+            const result = await response.json();
+            document.getElementById('status-message').textContent = `ログレベル設定: ${result.status}`;
+            document.getElementById('status-message').style.color = 'blue';
+        } catch (error) {
+            console.error("ログレベル設定APIエラー:", error);
+            document.getElementById('status-message').textContent = `ログレベル設定エラー: ${error.message}`;
+            document.getElementById('status-message').style.color = 'red';
+        }
+    });
+
+    // 角度幅スライダー
+    document.getElementById('fanSlider').addEventListener('input', (e) => {
+        document.getElementById('fanValue').textContent = e.target.value;
+        // スライダーを動かしたときに、最新のデータを使って扇形を更新
+        fetchSensorData(); // 最新のGPSデータを取得し、updateFanを呼び出す
+    });
+
+    // NMEA表示切り替えボタン
+    document.getElementById('nmeaToggleButton').addEventListener('click', () => {
+        showNMEA = !showNMEA;
+        const nmeaContainer = document.getElementById('nmea-container');
+        if (showNMEA) {
+            nmeaContainer.style.display = 'flex';
+            fetchNMEAData(); // 表示開始時に一度データを取得
+        } else {
+            nmeaContainer.style.display = 'none';
+        }
+    });
+
+    // シンボル配置ボタン
+    document.getElementById('placeSymbolButton').addEventListener('click', () => {
+        isPlacingSymbol = !isPlacingSymbol;
+        const button = document.getElementById('placeSymbolButton');
+        if (isPlacingSymbol) {
+            button.classList.add('active');
+            button.textContent = 'シンボル配置停止';
+            map.getContainer().style.cursor = 'crosshair'; // マップカーソルを十字に変更
+            document.getElementById('status-message').textContent = "シンボル配置モード: ON - 地図をクリックして配置";
+            document.getElementById('status-message').style.color = 'green';
+        } else {
+            button.classList.remove('active');
+            button.textContent = 'シンボル配置';
+            map.getContainer().style.cursor = 'grab'; // マップカーソルをデフォルトに戻す
+            document.getElementById('status-message').textContent = "シンボル配置モード: OFF";
+            document.getElementById('status-message').style.color = 'blue';
+        }
+    });
 });

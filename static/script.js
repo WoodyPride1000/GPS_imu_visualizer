@@ -54,8 +54,13 @@ function initMap() {
     }).addTo(map);
 
     // マップのサイズを再計算してタイルを適切に表示させる
-    // DOMContentLoaded後にCSSが適用されるのを期待し、setTimeoutは削除
-    map.invalidateSize();
+    // requestAnimationFrameとsetTimeoutを組み合わせることで、
+    // DOMとCSSのレンダリングが完全に安定するのを待つ
+    window.requestAnimationFrame(() => {
+        setTimeout(() => {
+            map.invalidateSize();
+        }, 0); // 最小限の遅延 (DOMが完全に構築されてから次のマイクロタスクで実行)
+    });
 
     // ウィンドウのリサイズイベントにリスナーを追加
     // これにより、ブラウザウィンドウのサイズが変更されたときに地図が自動的に調整されます。
@@ -545,9 +550,9 @@ async function fetchNMEAData() {
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
     initChart(); // Chart.jsの初期化
-    setInterval(fetchSensorData, 1000); // 1秒ごとにデータ更新
-    setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新
-    setInterval(fetchNMEAData, 500); // 0.5秒ごとにNMEAデータ更新 (高頻度)
+    setInterval(fetchSensorData, 2000); // 2秒ごとにデータ更新
+    setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新 (変更なし)
+    setInterval(fetchNMEAData, 2000); // 2秒ごとにNMEAデータ更新
 
     // 地図追従チェックボックス
     document.getElementById('followMapCheckbox').addEventListener('change', (e) => {

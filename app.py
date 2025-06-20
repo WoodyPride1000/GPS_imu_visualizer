@@ -43,9 +43,9 @@ def load_config():
         'GPS': {
             'BasePort': '/dev/ttyUSB0',
             'RoverPort': '/dev/ttyUSB1',
-            'Baudrate': '4800',
+            'Baudrate': '115200',
             'BaselineLengthMeter': '0.7',
-            'ReadInterval': '1.01',
+            'ReadInterval': '0.01',
             'SerialRetryInterval': '5',
             'MaxBaselineError': '0.1',
             'HdopThreshold': '2.0',
@@ -237,38 +237,50 @@ class SensorData:
             lon_deg = msg.longitude
             quality = msg.gps_qual
             
-            # HDOPの取得をより安全にする
-            hdop = None
-            try:
-                hdop = msg.hdop
-            except AttributeError:
-                logger.warning(f"NMEA parsing error: 'hdop' attribute missing from GGA message - Line: '{line}'")
-                hdop = 99.9 # Default to high HDOP if attribute missing
-            except Exception as hdop_e:
-                logger.warning(f"NMEA parsing error: Failed to get hdop attribute: {hdop_e} - Line: '{line}'")
-                hdop = 99.9 # Default to high HDOP on unexpected error
+            hdop = 99.9 # Default to a high value
 
-            # 無効なデータ（0.0, 0.0など、またはNone/NaN）をチェック
+            # Try to get HDOP from attribute first, then fallback to raw data
+            try:
+                # Check if attribute exists and is not None/empty string
+                if hasattr(msg, 'hdop') and msg.hdop is not None and msg.hdop != '':
+                    hdop = float(msg.hdop)
+                else:
+                    # If attribute is missing or empty, try to parse manually from data list
+                    # GGA HDOP is field 8 (index 7)
+                    if len(msg.data) > 7 and msg.data[7] is not None and msg.data[7] != '':
+                        hdop = float(msg.data[7])
+                    else:
+                        # Log if the field is truly missing/empty
+                        logger.warning(f"NMEA parsing warning: HDOP field (index 7) is empty or missing in raw data: '{line}'")
+                        # hdop remains 99.9 (default)
+            except ValueError:
+                # Log if the value cannot be converted to float
+                logger.warning(f"NMEA parsing warning: HDOP value '{getattr(msg, 'hdop', 'N/A')}' (or msg.data[7]) is not a valid number - Line: '{line}'")
+                # hdop remains 99.9 (default)
+            except Exception as hdop_e:
+                # Catch any other unexpected errors during HDOP extraction
+                logger.warning(f"NMEA parsing warning: Unexpected error getting HDOP: {hdop_e} - Line: '{line}'")
+                # hdop remains 99.9 (default)
+
+            # --- Validation for lat/lon, hdop, quality ---
             if abs(lat_deg) < 0.0001 and abs(lon_deg) < 0.0001:
                 logger.debug(f"NMEA: Invalid lat/lon (0.0, 0.0) detected - Line: '{line}'")
                 return None
-            if hdop is None: # HDOPがNoneの場合のデフォルト値
-                hdop = 99.9
             
-            # Ensure hdop is a float. It should be if pynmea2 parses it, but defensive.
-            if not isinstance(hdop, (int, float)):
+            # Ensure quality is int. pynmea2 typically returns int but defensive.
+            if not isinstance(quality, int):
                 try:
-                    hdop = float(hdop)
+                    quality = int(quality)
                 except (ValueError, TypeError):
-                    logger.warning(f"NMEA parsing error: HDOP value is not a valid number: '{hdop}' - Line: '{line}'")
-                    hdop = 99.9
+                    logger.warning(f"NMEA parsing warning: GPS quality value is not a valid integer: '{quality}' - Line: '{line}'")
+                    quality = 0 # Default to unknown quality
 
 
             return {'lat': lat_deg, 'lon': lon_deg, 'hdop': hdop, 'quality': quality}
         except pynmea2.ParseError as e:
             logger.debug(f"NMEA ParseError (Invalid format or non-GGA): {e} - Line: '{line}'")
             return None
-        except ValueError as e: # float変換失敗など
+        except ValueError as e: # Catch value errors during float/int conversion for other fields
             logger.warning(f"NMEA data conversion error: {e} - Line: '{line}'")
             return None
         except Exception as e:
@@ -650,205 +662,4 @@ def calculate_heading_and_error_thread():
                 # dequeの単純平均を最終的な融合方位角とする（円環平均が必要な場合は修正）
                 if sensor_data.heading_history:
                     sensor_data.heading_fused = sum(sensor_data.heading_history) / len(sensor_data.heading_history)
-                    sensor_data.heading_fused = (sensor_data.heading_fused + 360) % 360 # 再び0-360度に正規化
-
-                sensor_data.last_fused_heading = sensor_data.heading_fused
-
-            else:
-                # GPSデータが不完全な場合
-                sensor_data.heading_gps = 0.0 # GPS方位は不定
-                if imu_status and sensor_data.last_fused_heading != 0.0: # IMUのみで更新を継続
-                    integrated_heading_change = imu_raw_gyro_z_avg * delta_time
-                    sensor_data.heading_fused = (sensor_data.last_fused_heading + integrated_heading_change + 360) % 360
-                    sensor_data.last_fused_heading = sensor_data.heading_fused
-                else:
-                    sensor_data.heading_fused = 0.0 # IMUもGPSも使えない場合は不定
-
-            # --- 基線誤差の計算 ---
-            # ロジックは現状維持。configから読み込んだ値を使用。
-            if sensor_data.base_data['quality'] >= FIX_QUALITY_THRESHOLD and sensor_data.rover_data['quality'] >= FIX_QUALITY_THRESHOLD and \
-               sensor_data.base_data['hdop'] < HDOP_THRESHOLD and sensor_data.rover_data['hdop'] < HDOP_THRESHOLD:
-                # RTK Fix/Float based on quality and HDOP
-                # Adjusted based on MAX_BASELINE_ERROR from config, assuming it's a general multiplier
-                sensor_data.error = max(MAX_BASELINE_ERROR * 0.2, MAX_BASELINE_ERROR * 0.05 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
-            else: # Single or unknown
-                sensor_data.error = max(MAX_BASELINE_ERROR, MAX_BASELINE_ERROR * 0.5 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
-            
-            # グラフデータの更新
-            # 現在の方位角のインデックスを更新
-            idx = int(sensor_data.heading_fused) % 360
-            # Z軸角速度をグラフの表示範囲 (-99〜-20) に正規化
-            # ここではダミーとして、Z軸ジャイロの絶対値が小さいほどグラフの値が-20に近づく（安定している）ようにマッピング
-            # 実際の表示したい内容に合わせてこのロジックを調整してください
-            normalized_gyro_z_for_graph = -20.0 - abs(imu_raw_gyro_z_avg) * 5
-            normalized_gyro_z_for_graph = max(-99.0, min(-20.0, normalized_gyro_z_for_graph))
-            sensor_data.graph_values[idx] = normalized_gyro_z_for_graph
-            
-        time.sleep(CALCULATION_INTERVAL) # configから読み込んだCALCULATION_INTERVALを使用
-    logger.info("計算スレッドを停止します。")
-
-# --- APIエンドポイント ---
-@app.route("/")
-def home():
-    """
-    アプリケーションのルートURLにアクセスしたときに、GPS可視化ページを表示します。
-    """
-    return render_template('index.html')
-
-@app.route("/api/position", methods=["GET"])
-@require_api_key
-def get_current_data():
-    """
-    現在のGPS、IMU、および計算されたヘディング・誤差データをJSON形式で返すAPIエンドポイント。
-    index.htmlのJavaScriptが期待するフィールド名に合わせる。
-    """
-    with sensor_data.lock:
-        data = {
-            "lat": round(sensor_data.base_data['lat'], 7),
-            "lon": round(sensor_data.base_data['lon'], 7),
-            "hdop_base": round(sensor_data.base_data['hdop'], 2),
-            "base_quality": sensor_data.base_data['quality'], # JSでは使われないがデバッグ用
-            "rover_lat": round(sensor_data.rover_data['lat'], 7), # JSでは使われない
-            "rover_lon": round(sensor_data.rover_data['lon'], 7), # JSでは使われない
-            "hdop_rover": round(sensor_data.rover_data['hdop'], 2),
-            "rover_quality": sensor_data.rover_data['quality'], # JSでは使われないがデバッグ用
-            "heading": round(sensor_data.heading_fused, 2),
-            "heading_gps": round(sensor_data.heading_gps, 2), # 新しく追加: GPSのみからのヘッドデータ
-            "error": round(sensor_data.error, 3),
-            "distance": round(sensor_data.distance, 3),
-            "imu": sensor_data.imu_status,
-            "imu_accel_x": round(sensor_data.imu_accel_x, 5), # JSでは使われない
-            "imu_accel_y": round(sensor_data.imu_accel_y, 5), # JSでは使われない
-            "imu_accel_z": round(sensor_data.imu_accel_z, 5), # JSでは使われない
-            "imu_gyro_x": round(sensor_data.imu_gyro_x, 5), # JSでは使われない
-            "imu_gyro_y": round(sensor_data.imu_gyro_y, 5), # JSでは使われない
-            "imu_raw_gyro_z": round(sensor_data.imu_raw_gyro_z, 5), # オフセット適用・移動平均後のZ軸ジャイロ
-            "gyro_z_offset": round(sensor_data.gyro_z_offset, 5),
-            "base_connected": sensor_data.base_connected,
-            "rover_connected": sensor_data.rover_connected,
-            "base_port_errors": sensor_data.base_port_errors,
-            "base_serial_errors": sensor_data.base_serial_errors,
-            "rover_port_errors": sensor_data.rover_port_errors,
-            "rover_serial_errors": sensor_data.rover_serial_errors,
-            "dummy_mode": DUMMY_MODE,
-            "log_level": logging.getLevelName(logger.level)
-        }
-    return jsonify(data)
-
-@app.route("/api/graph_data", methods=["GET"])
-@require_api_key
-def get_graph_data():
-    """
-    グラフ表示用の方位角別データをJSON形式で返すAPIエンドポイント。
-    """
-    with sensor_data.lock:
-        data = {
-            "azimuths": list(sensor_data.graph_azimuths),
-            "values": list(sensor_data.graph_values)
-        }
-    return jsonify(data)
-
-@app.route("/api/nmea_data", methods=["GET"])
-@require_api_key
-def get_nmea_data():
-    """
-    保存されているNMEA生データをJSON形式で返すAPIエンドポイント。
-    """
-    with sensor_data.lock:
-        # dequeをリストに変換して返す
-        return jsonify({"nmea_lines": list(sensor_data.nmea_buffer)})
-
-@app.route("/api/calibrate_imu", methods=["POST"])
-@require_api_key
-def calibrate_imu():
-    """
-    IMUのジャイロZ軸オフセットをキャリブレーションするAPIエンドポイント。
-    """
-    action = request.json.get('action')
-    with sensor_data.lock:
-        if action == 'start':
-            sensor_data.calibration_mode = True
-            sensor_data.calibration_samples = []
-            sensor_data.gyro_z_offset = 0.0 # キャリブレーション開始時にオフセットをリセット
-            logger.info("IMUキャリブレーションを開始します...")
-            return jsonify({"status": "Calibration started."})
-        elif action == 'stop':
-            sensor_data.calibration_mode = False
-            if sensor_data.calibration_samples:
-                # キャリブレーション中に収集した生のジャイロZ値の平均をオフセットとする
-                sensor_data.gyro_z_offset = sum(sensor_data.calibration_samples) / len(sensor_data.calibration_samples)
-                # キャリブレーション完了後、gyro_z_bufferを新しいオフセットで再初期化
-                sensor_data.gyro_z_buffer.clear()
-                logger.info(f"IMUキャリブレーションが完了しました。Z軸オフセット: {sensor_data.gyro_z_offset:.5f}")
-            else:
-                sensor_data.gyro_z_offset = 0.0
-                logger.warning("IMUキャリブレーション: サンプルがありませんでした。オフセットは0に設定されました。")
-            return jsonify({"status": "Calibration stopped.", "offset": sensor_data.gyro_z_offset})
-        else:
-            return jsonify({"error": "Invalid action."}), 400
-
-@app.route("/api/set_log_level", methods=["POST"])
-@require_api_key
-def set_log_level():
-    """
-    ログレベルを変更するAPIエンドポイント。
-    """
-    level_str = request.json.get('level', 'INFO').upper()
-    try:
-        level = getattr(logging, level_str)
-        logger.setLevel(level)
-        logging.getLogger().setLevel(level) # ルートロガーも変更
-        logger.info(f"ログレベルを {level_str} に変更しました。")
-        return jsonify({"status": f"Log level set to {level_str}"})
-    except AttributeError:
-        return jsonify({"error": f"無効なログレベル: {level_str}"}), 400
-
-# --- アプリケーション実行 ---
-def run_app():
-    # スレッドの開始
-    threading.Thread(target=read_gps_thread, args=(GPS_BASE_PORT, 'base'), daemon=True).start()
-    threading.Thread(target=read_gps_thread, args=(GPS_ROVER_PORT, 'rover'), daemon=True).start()
-    threading.Thread(target=read_imu_thread, args=(sensor_data,), daemon=True).start()
-    threading.Thread(target=calculate_heading_and_error_thread, daemon=True).start()
-
-    # Flaskアプリケーションの実行 (HTTPS対応)
-    # config.iniからパスを読み込む
-    cert_path = CERT_PATH
-    key_path = KEY_PATH
-
-    if os.path.exists(cert_path) and os.path.exists(key_path):
-        logger.info("SSL証明書と秘密鍵が見つかりました。HTTPSでサーバーを起動します。")
-        # SSLContextの作成（推奨される方法）
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        try:
-            context.load_cert_chain(cert_path, key_path)
-            app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, ssl_context=context)
-        except ssl.SSLError as e:
-            logger.critical(f"SSLコンテキストのロードエラー: {e}。HTTPでサーバーを起動します。証明書または鍵ファイルを確認してください。")
-            app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-        except FileNotFoundError as e:
-            logger.critical(f"SSL証明書または秘密鍵ファイルが見つかりません: {e}。HTTPでサーバーを起動します。")
-            app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-    else:
-        logger.warning("SSL証明書 (cert.pem) または秘密鍵 (key.pem) が見つかりません。HTTPでサーバーを起動します。")
-        logger.warning("HTTPSを有効にするには、opensslコマンドでファイルを生成し、スクリプトと同じディレクトリに配置してください。")
-        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-
-if __name__ == "__main__":
-    try:
-        # IMU初期化はスレッド開始前に一度試みる (ダミーモードでない場合のみ)
-        if not DUMMY_MODE and GLOBAL_IMU_MODULE_AVAILABLE:
-            initialize_imu_device(sensor_data)
-        
-        run_app()
-    except KeyboardInterrupt:
-        logger.info("アプリケーションをシャットダウンしています...")
-        stop_event.set() # 全てのスレッドに停止を通知
-        # デーモンスレッドは自動終了するため、明示的なjoinは不要だが、
-        # クリーンアップやログの完了を待つために少し待機
-        time.sleep(2) 
-        logger.info("アプリケーションが終了しました。")
-    except Exception as e:
-        logger.critical(f"アプリケーションの予期せぬ終了: {e}")
-        stop_event.set()
-        time.sleep(2)
+                    sensor_data.heading_fused = (sensor_data.heading_fused + 360) % 360 # 再

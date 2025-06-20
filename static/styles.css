@@ -1,314 +1,330 @@
-body {
+/* static/styles.css */
+
+/* 全体的なリセットと基本スタイル */
+html, body {
     margin: 0;
-    overflow: hidden; /* スクロールバーを非表示にする */
-    font-family: 'Inter', sans-serif; /* Tailwind CSSのデフォルトフォント */
-}
-
-/* 地図コンテナのスタイル */
-#map {
-    height: 100vh; /* ビューポートの高さ全体を使う */
+    padding: 0;
+    height: 100%; /* ビューポート全体を使用 */
     width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 1; /* オーバーレイボックスより低いz-indexを設定 */
+    font-family: 'Inter', sans-serif; /* Google FontsのInterを使用 */
+    overflow: hidden; /* スクロールバーが出ないようにする */
+    display: flex; /* bodyをflexコンテナにする */
+    flex-direction: column; /* 垂直方向に要素を並べる */
+    background-color: #f0f2f5; /* 背景色 */
+    color: #333;
 }
 
-/* オーバーレイボックスの共通スタイル */
+/* マップコンテナのスタイル */
+#map {
+    height: 100vh; /* ビューポートの高さ全体を使用 */
+    width: 100%; /* 幅を100%に設定 */
+    z-index: 1; /* 他のオーバーレイの下に配置 */
+}
+
+/* オーバーレイボックスの基本スタイル */
 .overlay-box {
-    background-color: rgba(255, 255, 255, 0.9);
-    border-radius: 8px; /* 角丸 */
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-    padding: 15px;
-    z-index: 1000; /* マップの上に表示 */
     position: absolute;
+    background-color: rgba(255, 255, 255, 0.9); /* 半透明の白 */
+    border-radius: 8px; /* 角を丸くする */
+    padding: 15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* 影 */
+    z-index: 1000; /* マップの上に配置 */
+    backdrop-filter: blur(5px); /* 背景のぼかし効果 */
+    -webkit-backdrop-filter: blur(5px); /* Safari対応 */
+    border: 1px solid rgba(200, 200, 200, 0.3); /* 軽いボーダー */
+    display: flex;
+    flex-direction: column;
+    gap: 8px; /* 要素間のスペース */
 }
 
-/* 情報表示ボックス */
+/* 情報ボックス */
 .info-box {
-    top: 20px;
-    left: 20px;
-    font-size: 14px;
-    line-height: 1.8; /* 行間を広げて見やすく */
-    display: grid; /* グリッドレイアウトで整列 */
-    grid-template-columns: auto 1fr;
-    gap: 5px 10px;
-    min-width: 280px; /* ある程度の幅を確保 */
+    top: 15px;
+    left: 15px;
+    width: 280px; /* 固定幅 */
+    font-size: 0.9em;
+}
+.info-box h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #0056b3;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
 }
 .info-box div {
-    white-space: nowrap; /* テキストの折り返しを防ぐ */
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
 }
 .info-box span {
     font-weight: bold;
-    color: #333;
+    color: #1a73e8; /* Google Blue */
 }
 
 /* コントロールボックス */
 .control-box {
-    top: 20px;
-    right: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px; /* 要素間のスペース */
-    padding: 15px;
+    top: 15px;
+    right: 15px;
+    width: 250px; /* 固定幅 */
+    font-size: 0.9em;
+}
+.control-box h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #0056b3;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
 }
 .control-box label {
     display: flex;
     align-items: center;
     gap: 8px;
-    cursor: pointer;
+    margin-bottom: 5px;
 }
-.control-box button,
-.control-box select {
+.control-box button {
+    background-color: #4CAF50; /* Green */
+    color: white;
     padding: 8px 12px;
-    border-radius: 6px;
-    border: 1px solid #ccc;
-    background-color: #f0f0f0;
+    border: none;
+    border-radius: 5px;
     cursor: pointer;
-    transition: background-color 0.2s, box-shadow 0.2s;
+    font-size: 0.9em;
+    margin-top: 10px;
+    transition: background-color 0.3s ease;
 }
 .control-box button:hover {
-    background-color: #e0e0e0;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    background-color: #45a049;
 }
-.control-box button#calibrateButton.calibrating,
-.control-box button#placeSymbolButton.active { /* シンボル配置ボタンのアクティブスタイル */
-    background-color: #ff4d4d; /* キャリブレーション中の赤色 */
-    color: white;
+.control-box button.calibrating {
+    background-color: #ff9800; /* Orange when calibrating */
 }
-.control-box button#calibrateButton.calibrating:hover,
-.control-box button#placeSymbolButton.active:hover {
-     background-color: #cc0000;
+.control-box button.calibrating:hover {
+    background-color: #e68a00;
 }
+.control-box button.active {
+    background-color: #008CBA; /* Blue when active (e.g., symbol placement) */
+}
+.control-box button.active:hover {
+    background-color: #007B9E;
+}
+.control-box select {
+    width: 100%;
+    padding: 5px;
+    margin-top: 5px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    background-color: #fff;
+}
+
 
 /* スライダーボックス */
 .slider-box {
-    bottom: 20px;
-    right: 20px;
+    bottom: 15px;
+    left: 15px;
+    width: 280px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    width: 250px;
-    padding: 15px;
+    align-items: center;
+}
+.slider-box h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #0056b3;
 }
 .slider-box input[type="range"] {
     width: 100%;
-    -webkit-appearance: none; /* デフォルトスタイルをリセット */
+    -webkit-appearance: none;
     height: 8px;
     background: #d3d3d3;
     outline: none;
     opacity: 0.7;
+    -webkit-transition: .2s;
     transition: opacity .2s;
-    border-radius: 4px;
+    border-radius: 5px;
+}
+.slider-box input[type="range"]:hover {
+    opacity: 1;
 }
 .slider-box input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 20px;
     height: 20px;
-    background: #007bff;
-    cursor: pointer;
     border-radius: 50%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    background: #1a73e8;
+    cursor: pointer;
 }
 .slider-box input[type="range"]::-moz-range-thumb {
     width: 20px;
     height: 20px;
-    background: #007bff;
-    cursor: pointer;
     border-radius: 50%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    background: #1a73e8;
+    cursor: pointer;
 }
 
-/* グラフコンテナ */
+/* ステータス表示のテキスト色 */
+.status-ok {
+    color: green;
+    font-weight: bold;
+}
+.status-ng {
+    color: red;
+    font-weight: bold;
+}
+#status-message {
+    color: orange;
+    font-weight: bold;
+    margin-top: 10px;
+    text-align: center;
+}
+
+/* Chart.js グラフコンテナ */
 #graph-container {
-    bottom: 20px;
-    left: 20px;
-    width: 450px; /* グラフの幅 */
-    height: 280px; /* グラフの高さ */
-    padding: 15px;
+    position: absolute;
+    bottom: 15px;
+    right: 15px;
+    width: 350px; /* グラフの幅 */
+    height: 350px; /* グラフの高さ */
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
+    padding: 10px;
 }
 #graph-container h3 {
     margin-top: 0;
-    margin-bottom: 10px;
-    color: #333;
+    margin-bottom: 5px;
+    color: #0056b3;
+    font-size: 1.1em;
 }
 #azimuthChart {
-    width: 100% !important; /* 親要素の幅に合わせる */
-    height: 100% !important; /* 親要素の高さに合わせる */
+    flex-grow: 1; /* 可能な限りスペースを占有 */
+    width: 100% !important; /* Chart.jsのインラインスタイルを上書き */
+    height: 100% !important; /* Chart.jsのインラインスタイルを上書き */
 }
 
 /* NMEA表示コンテナ */
 #nmea-container {
     position: absolute;
-    top: 20px; /* 上部情報ボックスの隣 */
-    left: 330px; /* info-boxの幅+余白 */
-    width: 500px; /* 適切な幅に調整 */
-    height: 280px; /* 適切な高さに調整 */
-    background-color: rgba(255, 255, 255, 0.9);
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-    padding: 15px;
-    z-index: 1000;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%); /* 中央に配置 */
+    width: 60%; /* 幅を広げる */
+    height: 40%; /* 高さを広げる */
     display: none; /* 初期状態では非表示 */
-    flex-direction: column;
+    padding: 15px;
+    box-sizing: border-box; /* パディングを幅に含める */
+}
+#nmea-container h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #0056b3;
 }
 #nmea-output {
     width: 100%;
-    height: 100%;
-    border: 1px solid #ccc;
-    background-color: #f9f9f9;
-    font-family: 'Monaco', 'Consolas', monospace; /* 等幅フォント */
-    font-size: 12px;
-    resize: none; /* リサイズ不可 */
-    overflow-y: scroll; /* 縦スクロール */
-    padding: 5px;
-    box-sizing: border-box; /* paddingを含めて幅計算 */
-}
-#nmea-toggle-button {
-    margin-top: 10px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    border: 1px solid #ccc;
-    background-color: #f0f0f0;
-    cursor: pointer;
-    transition: background-color 0.2s, box-shadow 0.2s;
-}
-#nmea-toggle-button:hover {
-    background-color: #e0e0e0;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-/* カスタムシンボル用のスタイル */
-.custom-symbol-icon {
-    background-color: #007bff; /* 青色の円 */
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 2px solid white;
-    box-shadow: 0 0 0 2px #007bff; /* 外側の光彩 */
+    height: calc(100% - 30px); /* ヘッダーの高さ分を引く */
+    background-color: #333;
+    color: #0F0; /* 緑色のテキスト (ターミナル風) */
+    border: 1px solid #555;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85em;
+    padding: 10px;
+    resize: none; /* リサイズを無効にする */
+    box-sizing: border-box;
+    border-radius: 5px;
 }
 
 /* シンボル情報コンテナ */
 #symbol-info-container {
     position: absolute;
-    top: 320px; /* info-boxの下に配置 (info-box height + padding + margin) */
-    left: 20px;
-    width: 280px; /* info-boxと同じ幅に合わせる */
-    height: calc(100vh - 360px); /* 下のグラフを考慮して調整 */
-    background-color: rgba(255, 255, 255, 0.9);
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    top: 15px;
+    left: 310px; /* info-boxの右隣 */
+    width: 300px;
+    max-height: calc(100% - 30px); /* 画面の高さいっぱいまで */
+    overflow-y: auto; /* コンテンツが多すぎる場合はスクロール */
     padding: 15px;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto; /* シンボルが増えたらスクロール */
 }
 #symbol-info-container h3 {
     margin-top: 0;
     margin-bottom: 10px;
-    color: #333;
+    color: #0056b3;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
 }
 .symbol-list {
     list-style: none;
     padding: 0;
     margin: 0;
-    width: 100%;
 }
 .symbol-item {
-    background-color: #f9f9f9;
-    border: 1px solid #eee;
-    border-radius: 6px;
-    padding: 8px 10px;
+    background-color: rgba(240, 240, 240, 0.8);
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 8px;
     margin-bottom: 8px;
-    font-size: 13px;
-    line-height: 1.5;
-    word-wrap: break-word; /* 長いテキストの折り返し */
-    position: relative; /* 削除ボタンの配置のため */
-}
-.symbol-item:last-child {
-    margin-bottom: 0;
+    font-size: 0.85em;
+    position: relative;
 }
 .symbol-item strong {
-    color: #0056b3;
+    color: #333;
 }
-.delete-symbol-button {
+.symbol-item button.delete-symbol-button {
     position: absolute;
     top: 5px;
     right: 5px;
-    background-color: #dc3545; /* 赤色 */
+    background-color: #f44336; /* Red */
     color: white;
     border: none;
     border-radius: 4px;
-    padding: 3px 6px;
-    font-size: 10px;
+    padding: 4px 8px;
     cursor: pointer;
-    transition: background-color 0.2s;
+    font-size: 0.75em;
+    transition: background-color 0.3s ease;
 }
-.delete-symbol-button:hover {
-    background-color: #c82333;
-}
-
-
-/* 接続ステータス表示用のスタイル */
-.status-ok { color: green; font-weight: bold; }
-.status-ng { color: red; font-weight: bold; }
-#status-message {
-    margin-top: 10px;
-    font-size: 15px;
-    word-break: break-all; /* 長いメッセージの折り返し */
+.symbol-item button.delete-symbol-button:hover {
+    background-color: #da190b;
 }
 
-/* レスポンシブデザイン */
-@media (max-width: 1200px) { /* 画面幅が狭い場合のNMEAコンテナ配置調整 */
-    #nmea-container {
-        top: auto;
-        bottom: 20px;
-        left: 500px; /* graph-containerの右隣 */
-        width: calc(100% - 520px); /* 右側の余白を考慮 */
-        height: 280px;
-    }
-    #symbol-info-container { /* グラフの下に配置 */
-        top: auto;
-        bottom: 320px; /* graph-containerの上 */
-        left: 20px;
-        width: 450px; /* グラフと同じ幅 */
-        height: 200px; /* 高さを調整 */
-    }
+/* カスタムシンボルアイコン (Leaflet.divIcon用) */
+.custom-symbol-icon {
+    background-color: #ff5722; /* Orange-red */
+    border: 2px solid #fff;
+    border-radius: 50%;
+    opacity: 0.8;
+    box-shadow: 0 0 5px rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-weight: bold;
+    font-size: 0.8em;
 }
+
+/* メディアクエリでモバイル対応 */
 @media (max-width: 768px) {
     .info-box, .control-box, .slider-box, #graph-container, #nmea-container, #symbol-info-container {
-        position: relative; /* 小さい画面では相対配置に */
-        width: calc(100% - 40px); /* 左右の余白を考慮 */
-        left: 20px;
-        right: 20px;
-        margin-bottom: 20px;
-        top: auto; /* 上下位置のリセット */
+        position: static; /* 固定配置を解除 */
+        width: 90% !important; /* 幅を広げる */
+        margin: 10px auto; /* 中央寄せ */
+        transform: none !important; /* transformをリセット */
+        box-sizing: border-box; /* パディングを幅に含める */
     }
-    .info-box {
-        margin-top: 20px; /* 上部に余白 */
-    }
-    .control-box {
-        flex-direction: column; /* 縦並びに変更 */
-    }
-    #map {
-        height: 50vh; /* 地図の高さを調整 */
-        position: relative;
-    }
+
     body {
-        overflow-y: auto; /* スクロールを許可 */
+        flex-direction: column; /* 常に縦並び */
+        overflow-y: auto; /* 縦スクロールを許可 */
     }
-    #nmea-container { /* 小さい画面ではinfo-boxの下に配置 */
-        left: 20px;
-        height: 200px; /* 高さを調整 */
+
+    #map {
+        height: 50vh; /* 地図の高さをビューポートの半分に */
+        min-height: 300px; /* 最小高さを設定 */
     }
-    #symbol-info-container {
-        left: 20px;
-        height: 200px;
-    }
+
+    /* ボックスの配置を調整 */
+    .info-box { order: 1; }
+    .control-box { order: 2; }
+    .slider-box { order: 3; }
+    #graph-container { order: 4; height: 300px; } /* グラフの高さを固定 */
+    #nmea-container { order: 5; height: 300px; } /* NMEAの高さを固定 */
+    #symbol-info-container { order: 6; }
 }

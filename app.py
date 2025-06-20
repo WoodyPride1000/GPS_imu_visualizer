@@ -43,9 +43,9 @@ def load_config():
         'GPS': {
             'BasePort': '/dev/ttyUSB0',
             'RoverPort': '/dev/ttyUSB1',
-            'Baudrate': '115200',
+            'Baudrate': '4800',
             'BaselineLengthMeter': '0.7',
-            'ReadInterval': '0.01',
+            'ReadInterval': '1.01',
             'SerialRetryInterval': '5',
             'MaxBaselineError': '0.1',
             'HdopThreshold': '2.0',
@@ -230,28 +230,49 @@ class SensorData:
             msg = pynmea2.parse(line)
             # GGAメッセージであることを確認
             if not isinstance(msg, pynmea2.types.talker.GGA):
+                logger.debug(f"NMEA: Not a GGA sentence - Line: '{line}'")
                 return None
             
             lat_deg = msg.latitude
             lon_deg = msg.longitude
             quality = msg.gps_qual
-            hdop = msg.hdop
+            
+            # HDOPの取得をより安全にする
+            hdop = None
+            try:
+                hdop = msg.hdop
+            except AttributeError:
+                logger.warning(f"NMEA parsing error: 'hdop' attribute missing from GGA message - Line: '{line}'")
+                hdop = 99.9 # Default to high HDOP if attribute missing
+            except Exception as hdop_e:
+                logger.warning(f"NMEA parsing error: Failed to get hdop attribute: {hdop_e} - Line: '{line}'")
+                hdop = 99.9 # Default to high HDOP on unexpected error
 
             # 無効なデータ（0.0, 0.0など、またはNone/NaN）をチェック
             if abs(lat_deg) < 0.0001 and abs(lon_deg) < 0.0001:
+                logger.debug(f"NMEA: Invalid lat/lon (0.0, 0.0) detected - Line: '{line}'")
                 return None
             if hdop is None: # HDOPがNoneの場合のデフォルト値
                 hdop = 99.9
+            
+            # Ensure hdop is a float. It should be if pynmea2 parses it, but defensive.
+            if not isinstance(hdop, (int, float)):
+                try:
+                    hdop = float(hdop)
+                except (ValueError, TypeError):
+                    logger.warning(f"NMEA parsing error: HDOP value is not a valid number: '{hdop}' - Line: '{line}'")
+                    hdop = 99.9
+
 
             return {'lat': lat_deg, 'lon': lon_deg, 'hdop': hdop, 'quality': quality}
         except pynmea2.ParseError as e:
-            logger.debug(f"NMEAパースエラー (GPGGA以外か不正フォーマット): {e} - Line: '{line}'")
+            logger.debug(f"NMEA ParseError (Invalid format or non-GGA): {e} - Line: '{line}'")
             return None
         except ValueError as e: # float変換失敗など
-            logger.warning(f"NMEAデータ変換エラー: {e} - Line: '{line}'")
+            logger.warning(f"NMEA data conversion error: {e} - Line: '{line}'")
             return None
         except Exception as e:
-            logger.error(f"予期せぬNMEA解析エラー: {e} - Line: '{line}'")
+            logger.error(f"Unexpected NMEA parsing error: {e} - Line: '{line}'")
             return None
 
 

@@ -54,8 +54,14 @@ function initMap() {
     }).addTo(map);
 
     // マップのサイズを再計算してタイルを適切に表示させる
-    // これにより、初期表示時のタイルずれが解消される可能性があります。
+    // DOMContentLoaded後にCSSが適用されるのを期待し、setTimeoutは削除
     map.invalidateSize();
+
+    // ウィンドウのリサイズイベントにリスナーを追加
+    // これにより、ブラウザウィンドウのサイズが変更されたときに地図が自動的に調整されます。
+    window.addEventListener('resize', () => {
+        map.invalidateSize();
+    });
 
     // 基準局と移動局のマーカーを東京駅の初期位置に設定
     baseMarker = L.marker([tokyoStationLat, tokyoStationLon], {title: "基準局"}).addTo(map).bindPopup("基準局").openPopup();
@@ -465,7 +471,8 @@ async function fetchGraphData() {
             return 'rgba(255, 99, 132, 1)';
         });
         azimuthChart.update(); // グラフを更新
-    } catch (error) {
+    }
+    catch (error) {
         console.error("グラフデータの取得中にエラー:", error);
         // グラフ取得エラーの場合もステータスメッセージを更新
         const statusMessageElement = document.getElementById('status-message');

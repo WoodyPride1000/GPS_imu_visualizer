@@ -421,8 +421,7 @@ async function fetchSensorData() {
              console.error("fetchSensorData: Element with ID 'status-message' not found.");
         }
 
-        // シンボルリストの情報を更新
-        // 方位角計算機能を削除したため、L.GeometryUtil.bearing のチェックは不要
+        // シンボルリストの情報を更新 (方位角計算部分は削除済み)
         const baseLatLng = baseMarker.getLatLng(); 
         customMarkers.forEach(symbol => {
             const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
@@ -430,9 +429,6 @@ async function fetchSensorData() {
             // LeafletのL.LatLng.distanceTo()を使用して距離を計算
             const distanceToBase = baseLatLng.distanceTo(symbolLatLng); 
             document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
-
-            // 方位角の表示は削除するため、この部分は削除
-            // document.getElementById(`bearing-${symbol.id}`).textContent = "..."; 
         });
 
     } catch (error) {

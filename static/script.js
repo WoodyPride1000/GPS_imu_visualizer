@@ -424,21 +424,26 @@ async function fetchSensorData() {
 
 
         // シンボルリストの情報を更新
-        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.bearing) { // L.GeometryUtil.distance は不要になったため削除
+        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.bearing) { 
             // 変更: baseMarkerから直接LatLngを取得
             const baseLatLng = baseMarker.getLatLng(); 
             customMarkers.forEach(symbol => {
                 const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
 
-                // 修正: LeafletのL.LatLng.distanceTo()を使用して距離を計算
-                const distanceToBase = baseLatLng.distanceTo(symbolLatLng); // 修正点
-                const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); // mapを渡すのは維持
-
+                // LeafletのL.LatLng.distanceTo()を使用して距離を計算
+                const distanceToBase = baseLatLng.distanceTo(symbolLatLng); 
                 document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
-                document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);
+
+                // 修正: 距離が非常に小さい場合は「同地点」と表示し、それ以外の場合のみ方位角を計算
+                if (distanceToBase < 0.001) { // 1ミリメートル未満の場合を「同地点」と判断
+                    document.getElementById(`bearing-${symbol.id}`).textContent = "同地点";
+                } else {
+                    const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); 
+                    document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);
+                }
             });
         } else {
-            console.warn("Leaflet.GeometryUtil.bearingが利用できないため、シンボルの方位角は更新されません。"); // メッセージも修正
+            console.warn("Leaflet.GeometryUtil.bearingが利用できないため、シンボルの方位角は更新されません。"); 
         }
 
     } catch (error) {

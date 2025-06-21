@@ -424,20 +424,21 @@ async function fetchSensorData() {
 
 
         // シンボルリストの情報を更新
-        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.distance && L.GeometryUtil.bearing) {
-            // 変更: baseMarkerから直接LatLngを取得し、地図コンテキストを確保
-            const baseLatLng = baseMarker.getLatLng(); // 修正点
+        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.bearing) { // L.GeometryUtil.distance は不要になったため削除
+            // 変更: baseMarkerから直接LatLngを取得
+            const baseLatLng = baseMarker.getLatLng(); 
             customMarkers.forEach(symbol => {
-                const symbolLatLng = L.latLng(symbol.lat, symbol.lon);
-                // 修正: L.GeometryUtil.distance と L.GeometryUtil.bearing の最初の引数に 'map' オブジェクトを追加
-                const distanceToBase = L.GeometryUtil.distance(map, baseLatLng, symbolLatLng); // 修正点
-                const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); // 修正点
+                const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
+
+                // 修正: LeafletのL.LatLng.distanceTo()を使用して距離を計算
+                const distanceToBase = baseLatLng.distanceTo(symbolLatLng); // 修正点
+                const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); // mapを渡すのは維持
 
                 document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
                 document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);
             });
         } else {
-            console.warn("L.GeometryUtilが利用できないため、シンボル情報の距離・方位角は更新されません。");
+            console.warn("Leaflet.GeometryUtil.bearingが利用できないため、シンボルの方位角は更新されません。"); // メッセージも修正
         }
 
     } catch (error) {

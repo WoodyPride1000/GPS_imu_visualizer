@@ -429,8 +429,9 @@ async function fetchSensorData() {
             const baseLatLng = baseMarker.getLatLng(); // 修正点
             customMarkers.forEach(symbol => {
                 const symbolLatLng = L.latLng(symbol.lat, symbol.lon);
-                const distanceToBase = L.GeometryUtil.distance(baseLatLng, symbolLatLng); // この行がエラーの原因だった
-                const bearingToBase = L.GeometryUtil.bearing(baseLatLng, symbolLatLng);
+                // 修正: L.GeometryUtil.distance と L.GeometryUtil.bearing の最初の引数に 'map' オブジェクトを追加
+                const distanceToBase = L.GeometryUtil.distance(map, baseLatLng, symbolLatLng); // 修正点
+                const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); // 修正点
 
                 document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
                 document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);

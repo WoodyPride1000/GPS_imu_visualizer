@@ -12,23 +12,13 @@ let baseMarker, roverMarker, headingLine, fanLayer, calculatedHeadingLine;
 let followMap = true;
 let gridLayer;
 let currentCoordSystem = 'wgs84'; // 初期座標系
-let azimuthChart; // Chart.jsインスタンス
+// IMUグラフは削除されるため、azimuthChartおよびchartDataは削除
 let showNMEA = false; // NMEA表示の状態
 let isPlacingSymbol = false; // シンボル配置モードの状態
 let symbolCounter = 0; // シンボルID用のカウンター
 // customMarkersの要素は { id: string, name: string, lat: number, lon: number, marker: L.Marker, element: HTMLElement } となる
 let customMarkers = []; // 配置されたカスタムマーカーを保存する配列
 
-let chartData = {
-    labels: Array.from({length: 360}, (_, i) => i.toString()), // 0-359
-    datasets: [{
-        label: 'IMU Z軸安定度', // グラフのラベル
-        backgroundColor: 'rgba(75, 192, 192, 0.6)', // 初期色（PolarArea用）
-        borderColor: 'rgba(75, 192, 192, 1)',
-        borderWidth: 1,
-        data: Array(360).fill(-50), // app.pyの初期値に合わせて-50
-    }]
-};
 
 // --- ヘルパー関数 ---
 
@@ -238,53 +228,7 @@ function convertCoordinates(lat, lon, targetSystem) {
 }
 
 // --- Chart.js グラフの初期化 ---
-function initChart() {
-    const ctx = document.getElementById('azimuthChart').getContext('2d');
-    azimuthChart = new Chart(ctx, {
-        type: 'polarArea', // ご提示の script.js に合わせて Polar Area Chart
-        data: chartData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scale: {
-                r: {
-                    angleLines: {
-                        display: true
-                    },
-                    suggestedMin: -100, // グラフの最小値
-                    suggestedMax: 0,  // グラフの最大値
-                    pointLabels: {
-                        display: true, // 方位角ラベルを表示
-                        centerPointLabels: true // ラベルを中央に表示
-                    },
-                    ticks: {
-                        stepSize: 20 // 目盛りのステップサイズ
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    display: false // 凡例は表示しない
-                },
-                title: {
-                    display: true,
-                    text: 'IMU Z軸安定度 (方位角別)'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return `方位角 ${context.label}: ${context.raw.toFixed(2)}`;
-                        }
-                    }
-                },
-                
-            },
-            animation: {
-                duration: 0 // アニメーションなしで即時更新
-            }
-        }
-    });
-}
+// IMUグラフは削除されるため、この関数は不要になります。
 
 // --- ファン形状 (扇形) の更新 ---
 function updateFan(lat, lon, heading, angleWidth) {
@@ -347,24 +291,22 @@ async function fetchSensorData() {
 
         // 扇形の更新
         const fanValue = parseFloat(document.getElementById('fanSlider').value);
-        const headingFused = data.heading; // 融合方位角
+        const headingGPS = data.heading_gps; // GPS方位角（IMU削除のため、これが唯一の方位角となる）
         if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
-            // updateFan内でroverMarker.getLatLng()を使用するよう変更したため、引数は不要に
-            updateFan(roverLat, roverLon, headingFused, fanValue);
+            updateFan(roverLat, roverLon, headingGPS, fanValue);
         } else {
             console.warn("L.GeometryUtil.destination が利用できないため、扇形は描画されません。");
         }
 
         // 算出した方位を示す線の更新 (画面サイズの30%の長さで表示 - 緑色破線)
         if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
-            // 変更: baseMarkerから直接LatLngを取得し、地図コンテキストを確保
-            const baseLatLngForCalculatedLine = baseMarker.getLatLng(); // 修正点
+            const baseLatLngForCalculatedLine = baseMarker.getLatLng();
             const bounds = map.getBounds();
             const visibleHeightMeters = map.distance(bounds.getNorthWest(), L.latLng(bounds.getSouthWest().lat, bounds.getNorthWest().lng));
             const visibleWidthMeters = map.distance(bounds.getNorthWest(), bounds.getNorthEast());
             const dynamicLineLengthMeters = Math.min(visibleHeightMeters, visibleWidthMeters) * 0.30;
             
-            const calculatedLineDestination = L.GeometryUtil.destination(baseLatLngForCalculatedLine, headingFused, dynamicLineLengthMeters);
+            const calculatedLineDestination = L.GeometryUtil.destination(baseLatLngForCalculatedLine, headingGPS, dynamicLineLengthMeters);
             calculatedHeadingLine.setLatLngs([baseLatLngForCalculatedLine, calculatedLineDestination]);
         }
 
@@ -382,23 +324,22 @@ async function fetchSensorData() {
         document.getElementById('hdopRover').textContent = data.hdop_rover;
         document.getElementById('qualityBase').textContent = data.base_quality;
         document.getElementById('qualityRover').textContent = data.rover_quality;
-        document.getElementById('headingFused').textContent = data.heading.toFixed(2); // 融合方位角
-        document.getElementById('headingGPS').textContent = data.heading_gps.toFixed(2); // GPS方位角
+        document.getElementById('heading').textContent = data.heading.toFixed(2); // GPS方位角
         
-        // 方位角のずれ量の計算と表示
-        const headingDiff = normalizeAngleDifference(data.heading, data.heading_gps);
-        document.getElementById('headingDiff').textContent = headingDiff.toFixed(2);
+        // IMU削除のため方位角ずれは不要
+        // document.getElementById('headingDiff').textContent = headingDiff.toFixed(2);
 
         document.getElementById('distance').textContent = data.distance.toFixed(3);
         document.getElementById('error').textContent = data.error.toFixed(3);
         
-        document.getElementById('imuStatus').textContent = data.imu ? 'ON' : 'OFF';
+        // IMUステータスは常にOFF
+        document.getElementById('imuStatus').textContent = data.imu ? 'ON' : 'OFF'; // data.imuは常にfalseになる
         document.getElementById('imuStatus').className = data.imu ? 'status-ok' : 'status-ng';
 
-        document.getElementById('imuRawGyroZ').textContent = data.imu_raw_gyro_z.toFixed(5);
-        document.getElementById('gyroZOffset').textContent = data.gyro_z_offset.toFixed(5);
+        // IMU関連の表示は削除
+        // document.getElementById('imuRawGyroZ').textContent = data.imu_raw_gyro_z.toFixed(5);
+        // document.getElementById('gyroZOffset').textContent = data.gyro_z_offset.toFixed(5);
         
-        // baseConnectedとroverConnectedはdivにIDがあり、spanはその子要素
         document.getElementById('baseConnected').querySelector('span').className = data.base_connected ? 'status-ok' : 'status-ng';
         document.getElementById('baseConnected').querySelector('span').textContent = data.base_connected ? '接続中' : '切断';
         
@@ -410,7 +351,6 @@ async function fetchSensorData() {
         document.getElementById('roverPortErrors').textContent = data.rover_port_errors;
         document.getElementById('roverSerialErrors').textContent = data.rover_serial_errors;
 
-        // IDがspan要素に直接付与されているため、querySelector('span')は不要
         document.getElementById('dummyMode').textContent = data.dummy_mode ? 'ON' : 'OFF';
         document.getElementById('logLevel').textContent = data.log_level;
 
@@ -446,7 +386,7 @@ async function fetchSensorData() {
             message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
             color = 'red';
         } else if (error.message.includes("HTTPエラー: 404")) {
-            message = "APIエンドポイントが見つかりません (HTTP 404)。";
+            message = "APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。";
             color = 'red';
         } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
             message = "認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。";
@@ -476,12 +416,13 @@ async function fetchSensorData() {
         }
         if (imuStatusElement) {
             imuStatusElement.className = 'status-ng';
-            imuStatusElement.textContent = 'OFF';
+            imuStatusElement.textContent = 'OFF'; // IMUは常にOFF表示
         }
     }
 }
 
 // --- グラフデータの取得と更新 ---
+// IMUグラフは削除されるため、この関数は不要になりますが、API互換性のため残す
 async function fetchGraphData() {
     try {
         const response = await fetch(window.location.origin + '/api/graph_data', {
@@ -498,20 +439,10 @@ async function fetchGraphData() {
             }
             throw new Error(errorMessage);
         }
-        const data = await response.json();
-        chartData.datasets[0].data = data.values;
-        // PolarArea Chartの背景色とボーダー色をデータに応じて更新
-        chartData.datasets[0].backgroundColor = data.values.map(val => {
-            if (val > -30) return 'rgba(75, 192, 192, 0.6)'; // 良い値
-            if (val > -60) return 'rgba(255, 206, 86, 0.6)'; // 普通
-            return 'rgba(255, 99, 132, 0.6)'; // 悪い値
-        });
-        chartData.datasets[0].borderColor = data.values.map(val => {
-            if (val > -30) return 'rgba(75, 192, 192, 1)';
-            if (val > -60) return 'rgba(255, 206, 86, 1)';
-            return 'rgba(255, 99, 132, 1)';
-        });
-        azimuthChart.update(); // グラフを更新
+        // IMUグラフが削除されるため、ここではデータは使われない
+        // const data = await response.json(); 
+        // chartData.datasets[0].data = data.values;
+        // azimuthChart.update(); // グラフを更新
     }
     catch (error) {
         console.error("グラフデータの取得中にエラー:", error);
@@ -535,7 +466,7 @@ async function fetchGraphData() {
             statusMessageElement.textContent = message;
             statusMessageElement.style.color = color;
         } else {
-            console.error("fetchGraphData: Element with ID 'status-message' not found.");
+            console.error("fetchGraphData error handler: Element with ID 'status-message' not found.");
         }
     }
 }
@@ -628,9 +559,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    initChart(); // Chart.jsの初期化
+    // initChart(); // IMUグラフは削除されたため、不要
     setInterval(fetchSensorData, 2000); // 2秒ごとにデータ更新
-    setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新 (変更なし)
+    setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新 (IMUグラフがなくてもAPI呼び出しは残す)
     setInterval(fetchNMEAData, 2000); // 2秒ごとにNMEAデータ更新
 
     // 地図追従チェックボックス
@@ -653,70 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchSensorData(); // 座標系が変更されたら表示を更新するために、すぐにデータ取得をトリガー
     });
 
-    // IMUキャリブレーションボタン
-    document.getElementById('calibrateButton').addEventListener('click', async () => {
-        const button = document.getElementById('calibrateButton');
-        let action = '';
-        if (button.classList.contains('calibrating')) {
-            action = 'stop';
-            button.classList.remove('calibrating');
-            button.textContent = 'IMUキャリブレーション開始';
-        } else {
-            action = 'start';
-            button.classList.add('calibrating');
-            button.textContent = 'キャリブレーション停止';
-        }
-        
-        try {
-            const response = await fetch(window.location.origin + '/api/calibrate_imu', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-KEY': API_KEY
-                },
-                body: JSON.stringify({ action: action })
-            });
-            if (!response.ok) {
-                const errorStatus = response.status;
-                const errorText = await response.text();
-                let errorMessage = `HTTPエラー: ${errorStatus} - ${errorText}`;
-                if (errorStatus === 401) {
-                    errorMessage = "認証エラー: APIキーが不正です。";
-                } else if (errorStatus === 404) {
-                    errorMessage = "APIエンドポイントが見つかりません (HTTP 404)。";
-                }
-                throw new Error(errorMessage);
-            }
-            const result = await response.json();
-            const statusMessageElement = document.getElementById('status-message');
-            if (statusMessageElement) {
-                statusMessageElement.textContent = `キャリブレーション: ${result.status}`;
-                if (result.offset !== undefined) {
-                    statusMessageElement.textContent += ` オフセット: ${result.offset.toFixed(5)}`;
-                }
-                statusMessageElement.style.color = 'blue';
-            } else {
-                console.error("calibrateButton: Element with ID 'status-message' not found.");
-            }
-        } catch (error) {
-            console.error("キャリブレーションAPIエラー:", error);
-            const statusMessageElement = document.getElementById('status-message');
-            if (statusMessageElement) {
-                statusMessageElement.textContent = `キャリブレーションエラー: ${error.message}`;
-                statusMessageElement.style.color = 'red';
-            } else {
-                console.error("calibrateButton error handler: Element with ID 'status-message' not found.");
-            }
-            // エラー時は元の状態に戻す
-            if (action === 'start') {
-                button.classList.remove('calibrating');
-                button.textContent = 'IMUキャリブレーション開始';
-            } else {
-                button.classList.add('calibrating');
-                button.textContent = 'キャリブレーション停止';
-            }
-        }
-    });
+    // IMUキャリブレーションボタンは削除されるため、イベントリスナーも削除
 
     // ログレベル設定ボタン
     document.getElementById('setLogLevelButton').addEventListener('click', async () => {

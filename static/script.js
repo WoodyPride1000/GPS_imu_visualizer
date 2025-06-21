@@ -131,9 +131,8 @@ function initMap() {
                 <button class="delete-symbol-button" data-symbol-id="${symbolId}">削除</button><br>
                 緯度: ${lat.toFixed(7)}<br>
                 経度: ${lon.toFixed(7)}<br>
-                基準局からの距離: <span id="dist-${symbolId}">--</span> m<br>
-                基準局からの方位角: <span id="bearing-${symbolId}">--</span> °
-            `;
+                基準局からの距離: <span id="dist-${symbolId}">--</span> m
+            `; // 方位角の表示を削除
             symbolList.appendChild(listItem);
 
             // 削除ボタンにイベントリスナーを追加
@@ -422,29 +421,19 @@ async function fetchSensorData() {
              console.error("fetchSensorData: Element with ID 'status-message' not found.");
         }
 
-
         // シンボルリストの情報を更新
-        if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.bearing) { 
-            // 変更: baseMarkerから直接LatLngを取得
-            const baseLatLng = baseMarker.getLatLng(); 
-            customMarkers.forEach(symbol => {
-                const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
+        // 方位角計算機能を削除したため、L.GeometryUtil.bearing のチェックは不要
+        const baseLatLng = baseMarker.getLatLng(); 
+        customMarkers.forEach(symbol => {
+            const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
 
-                // LeafletのL.LatLng.distanceTo()を使用して距離を計算
-                const distanceToBase = baseLatLng.distanceTo(symbolLatLng); 
-                document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
+            // LeafletのL.LatLng.distanceTo()を使用して距離を計算
+            const distanceToBase = baseLatLng.distanceTo(symbolLatLng); 
+            document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
 
-                // 修正: 距離が非常に小さい場合は「同地点」と表示し、それ以外の場合のみ方位角を計算
-                if (distanceToBase < 0.001) { // 1ミリメートル未満の場合を「同地点」と判断
-                    document.getElementById(`bearing-${symbol.id}`).textContent = "同地点";
-                } else {
-                    const bearingToBase = L.GeometryUtil.bearing(map, baseLatLng, symbolLatLng); 
-                    document.getElementById(`bearing-${symbol.id}`).textContent = bearingToBase.toFixed(2);
-                }
-            });
-        } else {
-            console.warn("Leaflet.GeometryUtil.bearingが利用できないため、シンボルの方位角は更新されません。"); 
-        }
+            // 方位角の表示は削除するため、この部分は削除
+            // document.getElementById(`bearing-${symbol.id}`).textContent = "..."; 
+        });
 
     } catch (error) {
         console.error("センサーデータの取得中にエラー:", error);

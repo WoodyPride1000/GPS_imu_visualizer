@@ -276,7 +276,8 @@ function initChart() {
                             return `方位角 ${context.label}: ${context.raw.toFixed(2)}`;
                         }
                     }
-                }
+                },
+                
             },
             animation: {
                 duration: 0 // アニメーションなしで即時更新
@@ -421,7 +422,8 @@ async function fetchSensorData() {
              console.error("fetchSensorData: Element with ID 'status-message' not found.");
         }
 
-        // シンボルリストの情報を更新 (方位角計算部分は削除済み)
+        // シンボルリストの情報を更新
+        // 方位角計算機能を削除したため、L.GeometryUtil.bearing のチェックは不要
         const baseLatLng = baseMarker.getLatLng(); 
         customMarkers.forEach(symbol => {
             const symbolLatLng = symbol.marker.getLatLng(); // シンボルマーカーから直接LatLngを取得
@@ -429,6 +431,9 @@ async function fetchSensorData() {
             // LeafletのL.LatLng.distanceTo()を使用して距離を計算
             const distanceToBase = baseLatLng.distanceTo(symbolLatLng); 
             document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
+
+            // 方位角の表示は削除するため、この部分は削除
+            // document.getElementById(`bearing-${symbol.id}`).textContent = "..."; 
         });
 
     } catch (error) {
@@ -583,6 +588,33 @@ async function fetchNMEAData() {
     }
 }
 
+
+// --- ファン形状 (扇形) の更新 ---
+function updateFan(lat, lon, heading, angleWidth) {
+    // 方位角 (heading) は北を0°として時計回り (0-360)
+    // angleWidth は扇形の中心から左右への角度 (例えば45°なら全体で90°)
+    // Leaflet.GeometryUtil.destination を使用
+
+    // 変更: roverMarkerから直接LatLngを取得し、地図コンテキストを確保
+    const center = roverMarker.getLatLng(); // 修正点
+    // 扇形の半径をメートル単位で指定 (例: 50メートル)
+    const radiusMeters = 50; 
+
+    const points = [center];
+    const startAngle = (heading - angleWidth / 2 + 360) % 360;
+    const endAngle = (heading + angleWidth / 2 + 360) % 360;
+
+    const numSegments = 30; // 扇形を構成するセグメント数
+    for (let i = 0; i <= numSegments; i++) {
+        const angle = startAngle + (endAngle - startAngle) * i / numSegments;
+        // L.GeometryUtil.destination(origin, bearing, distance)
+        const point = L.GeometryUtil.destination(center, angle, radiusMeters);
+        points.push(point);
+    }
+    points.push(center); // 閉じたポリゴンにするために中心に戻る
+
+    fanLayer.setLatLngs(points);
+}
 
 // --- イベントリスナー ---
 document.addEventListener('DOMContentLoaded', () => {

@@ -219,7 +219,7 @@ class SensorData:
             self.imu_accel_z = accel_z
             self.imu_gyro_x = gyro_x
             self.imu_gyro_y = gyro_y
-            self.imu_gyro_z = gyro_z # 生のZ軸ジャイロ値を保存
+            self.imu_gyro_z = gyro_z # オフセット適用前の生のジャイロZ値
             self.last_imu_read_time = time.monotonic()
 
             if self.calibration_mode:
@@ -283,21 +283,10 @@ def initialize_imu_device(sensor_data: SensorData) -> bool:
         sensor_data.imu_device = MPU6050(MPU6050_I2C_BUS_NUM, MPU6050_I2C_ADDR)
         
         # センサーが応答するか簡単な読み取りで確認
-        accel_test = None
-        try:
-            # 優先的にget_accel_dataを試す (辞書を返すことを想定)
-            accel_test = sensor_data.imu_device.get_accel_data()
-            if not isinstance(accel_test, dict) or 'x' not in accel_test:
-                raise ValueError("get_accel_dataが有効な辞書を返しませんでした。")
-        except AttributeError:
-            # get_accel_dataがなければget_accelerationを試す (オブジェクトを返すことを想定)
-            logger.warning("get_accel_dataが見つかりませんでした。get_accelerationを試します。")
-            accel_test_obj = sensor_data.imu_device.get_acceleration()
-            accel_test = {'x': accel_test_obj.x, 'y': accel_test_obj.y, 'z': accel_test_obj.z}
-            if not hasattr(accel_test_obj, 'x') or not isinstance(accel_test_obj.x, (int, float)):
-                raise ValueError("get_accelerationが有効な加速度オブジェクトを返しませんでした。")
-        except Exception as e:
-            raise ValueError(f"加速度データ取得中にエラー: {e}")
+        accel_data_test = sensor_data.imu_device.get_acceleration()
+        # オブジェクトが有効な属性を持っているかチェック
+        if not hasattr(accel_data_test, 'x') or not isinstance(accel_data_test.x, (int, float)):
+            raise ValueError("IMUが有効な加速度データを返しませんでした。")
 
         with sensor_data.lock:
             sensor_data.imu_status = True
@@ -445,34 +434,17 @@ def read_imu_thread(sensor_data: SensorData):
             continue # IMUが利用できない間は次のループへ
 
         try:
-            # 加速度データの取得 (辞書を返すことを想定)
-            accel_data_dict = sensor_data.imu_device.get_accel_data()
-            # 角速度データの取得 (辞書を返すことを想定)
-            gyro_data_dict = sensor_data.imu_device.get_gyro_data()
+            # 加速度データの取得 (mpu6050-raspberrypiライブラリのget_acceleration()を使用)
+            accel_data_obj = sensor_data.imu_device.get_acceleration()
+            # 角速度データの取得 (mpu6050-raspberrypiライブラリのget_rotation()を使用)
+            gyro_data_obj = sensor_data.imu_device.get_rotation()
             
-            # 取得したデータをSensorDataオブジェクトに更新 (辞書から値を取得)
+            # 取得したデータをSensorDataオブジェクトに更新
             sensor_data.update_imu_data(
-                accel_data_dict['x'], accel_data_dict['y'], accel_data_dict['z'],
-                gyro_data_dict['x'], gyro_data_dict['y'], gyro_data_dict['z']
+                accel_data_obj.x, accel_data_obj.y, accel_data_obj.z,
+                gyro_data_obj.x, gyro_data_obj.y, gyro_data_obj.z
             )
             retry_count = 0 # 成功したらリトライカウントをリセット
-        except AttributeError as e:
-            # get_accel_dataやget_gyro_dataがない場合のフォールバック（以前のget_acceleration/rotation対応）
-            logger.warning(f"get_accel_data/get_gyro_dataが見つかりませんでした。別のメソッドを試します: {e}")
-            try:
-                accel_data_obj = sensor_data.imu_device.get_acceleration()
-                gyro_data_obj = sensor_data.imu_device.get_rotation()
-                sensor_data.update_imu_data(
-                    accel_data_obj.x, accel_data_obj.y, accel_data_obj.z,
-                    gyro_data_obj.x, gyro_data_obj.y, gyro_data_obj.z
-                )
-                retry_count = 0
-            except Exception as inner_e:
-                logger.error(f"IMU読み取りエラー (フォールバック失敗): {inner_e}。IMUステータスをFalseに設定しました。")
-                with sensor_data.lock:
-                    sensor_data.imu_status = False
-                time.sleep(SERIAL_RETRY_INTERVAL)
-                retry_count += 1
         except Exception as e:
             logger.error(f"IMU読み取りエラー: {e}。IMUステータスをFalseに設定しました。再接続を試みます。")
             with sensor_data.lock:
@@ -759,4 +731,3 @@ if __name__ == "__main__":
         logger.critical(f"アプリケーションの予期せぬ終了: {e}")
         stop_event.set()
         time.sleep(2)
-

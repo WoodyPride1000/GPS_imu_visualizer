@@ -27,12 +27,12 @@ def load_config():
     if not os.path.exists(config_file_path):
         print("config.iniが見つかりません。デフォルト設定を作成します。")
         config['DEFAULT'] = {
-            'API_KEY': 'your_api_key_here', # 必ず変更してください
+            'API_KEY': 'gnss', # 必ず変更してください
             'GPS_BASE_PORT': '/dev/ttyUSB0', # Linux/macOS
             'GPS_ROVER_PORT': '/dev/ttyUSB1', # Linux/macOS
             # 'GPS_BASE_PORT': 'COM3', # Windowsの場合
             # 'GPS_ROVER_PORT': 'COM4', # Windowsの場合
-            'BAUDRATE': '115200',
+            'BAUDRATE': '4800',
             'DUMMY_MODE': 'False',
             'LOG_LEVEL': 'INFO',
             'SERIAL_RETRY_INTERVAL': '5' # シリアルポート再接続間隔 (秒)
@@ -45,7 +45,7 @@ def load_config():
     # 設定値の取得と型変換
     # 環境変数からのAPIキー優先
     return {
-        'API_KEY': os.environ.get('API_KEY', config['DEFAULT'].get('API_KEY', 'your_api_key_here')),
+        'API_KEY': os.environ.get('API_KEY', config['DEFAULT'].get('API_KEY', 'gnss')),
         'GPS_BASE_PORT': config['DEFAULT'].get('GPS_BASE_PORT', '/dev/ttyUSB0'),
         'GPS_ROVER_PORT': config['DEFAULT'].get('GPS_ROVER_PORT', '/dev/ttyUSB1'),
         'BAUDRATE': int(config['DEFAULT'].get('BAUDRATE', '115200')),

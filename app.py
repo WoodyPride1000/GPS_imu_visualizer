@@ -1,5 +1,3 @@
-print("--- Application startup BEGIN ---") # 診断用print 1
-
 import serial
 import threading
 import time
@@ -20,15 +18,12 @@ from flask import Flask, jsonify, render_template, request
 from pyproj import Geod
 from geopy.distance import geodesic
 
-print("--- All core libraries imported ---") # 診断用print 2
-
 # --- IMUライブラリのインポート ---
 GLOBAL_IMU_MODULE_AVAILABLE = False
 try:
     import smbus # MPU6050ライブラリでsmbusが必要なため
     from mpu6050 import MPU6050 # MPU6050クラスをインポート
     GLOBAL_IMU_MODULE_AVAILABLE = True
-    print("--- MPU6050 library imported (if available) ---") # 診断用print 3
 except ImportError as e:
     # ロギング設定前に警告を出力し、その後ロガーを使用
     print(f"WARNING: mpu6050ライブラリが見つからないか、依存関係エラー: {e}。IMUは無効になります。")
@@ -36,108 +31,60 @@ except Exception as e:
     print(f"WARNING: IMUインポート中に予期せぬエラー: {e}。IMUは無効になります。")
 
 # --- 設定ファイルの読み込み ---
-def load_config():
-    """設定ファイルを読み込み、存在しない場合はデフォルトを作成する。
-    config.iniのセクション構造に合わせて読み込みを行う。
-    """
-    config = configparser.ConfigParser()
-    config_file_path = os.path.join(os.path.dirname(__file__), 'config.ini')
+config = configparser.ConfigParser()
+config_file_path = os.path.join(os.path.dirname(__file__), 'config.ini')
 
-    # デフォルト設定を定義（ユーザーの希望するconfig.iniのセクション構造に合わせる）
-    default_config_sections = {
-        'GPS': {
-            'BasePort': '/dev/ttyUSB0',
-            'RoverPort': '/dev/ttyUSB1',
-            'Baudrate': '115200',
-            'BaselineLengthMeter': '0.7',
-            'ReadInterval': '0.01',
-            'SerialRetryInterval': '5',
-            'MaxBaselineError': '0.1',
-            'HdopThreshold': '2.0',
-            'FixQualityThreshold': '2',
-            'MaxRetryCount': '10' # GPSスレッドの再接続リトライ回数
-        },
-        'IMU': {
+def load_config():
+    """設定ファイルを読み込み、存在しない場合はデフォルトを作成する。"""
+    if not os.path.exists(config_file_path):
+        print("config.iniが見つかりません。デフォルト設定を作成します。")
+        config['DEFAULT'] = {
+            'API_KEY': 'your_api_key_here', # 必ず変更してください
+            'GPS_BASE_PORT': '/dev/ttyUSB0', # Linux/macOS
+            'GPS_ROVER_PORT': '/dev/ttyUSB1', # Linux/macOS
+            # 'GPS_BASE_PORT': 'COM3', # Windowsの場合
+            # 'GPS_ROVER_PORT': 'COM4', # Windowsの場合
+            'BAUDRATE': '115200',
+            'DUMMY_MODE': 'False',
+            'LOG_LEVEL': 'INFO',
             'MPU6050_I2C_BUS_NUM': '1', # Raspberry PiのI2Cバス番号
             'MPU6050_I2C_ADDR': '0x68', # MPU6050のI2Cアドレス (0x68 or 0x69)
-            'ReadInterval': '0.02', # IMUデータ読み取り間隔 (秒)
-            'GyroZThreshold': '0.05', # Z軸ジャイロの静止閾値 (未使用だが互換性のため残す)
-            'MaxRetryCount': '5', # IMUスレッドの再初期化リトライ回数
-            'GyroBufferSize': '100', # ジャイロZ軸の移動平均計算用バッファサイズ
-            'GyroOutlierThreshold': '3.0' # Z軸ジャイロ異常値検出閾値 (標準偏差の倍数)
-        },
-        'FUSION': {
-            'ImuGpsFusionAlpha': '0.98' # GPSとIMUの方位角融合におけるGPS信頼度 (0.0-1.0)
-        },
-        'General': {
-            'APIKey': 'gnss', # APIキー
-            'DummyMode': 'False', # ダミーモードの有効/無効
-            'DummyScenario': 'linear', # ダミーモードのシナリオ (linear, circular, static)
-            'DummySpeedMps': '0.5', # ダミーモードの速度 (m/s)
-            'DummyAngularSpeed': '0.1', # ダミーモードの角速度 (rad/s)
-            'DummyRadiusM': '10.0', # ダミーモードの円形移動半径 (m)
-            'LogLevel': 'INFO', # ロギングレベル
-            'CalculationInterval': '0.1', # 計算スレッドの実行間隔 (秒)
-            'CertPath': 'cert.pem', # HTTPS証明書パス
-            'KeyPath': 'key.pem' # HTTPS秘密鍵パス
+            'IMU_READ_INTERVAL': '0.02', # IMUデータ読み取り間隔 (秒)
+            'IMU_GYRO_OUTLIER_THRESHOLD': '3.0', # Z軸ジャイロ異常値検出閾値 (標準偏差の倍数)
+            'IMU_MAX_RETRY_COUNT': '5', # IMU再初期化最大リトライ回数
+            'SERIAL_RETRY_INTERVAL': '5' # シリアルポート/IMU再接続間隔 (秒)
         }
-    }
-
-    if not os.path.exists(config_file_path):
-        print("config.iniが見つかりません。デフォルト設定を作成します。") # 診断用print
-        for section, options in default_config_sections.items():
-            config[section] = options
         with open(config_file_path, 'w') as configfile:
             config.write(configfile)
     else:
         config.read(config_file_path)
 
-    # 読み込んだ設定値をディクショナリとして返す
-    # セクションとキーを指定し、fallbackでデフォルト値を保証
-    app_config = {
-        # General
-        'API_KEY': os.environ.get('API_KEY', config.get('General', 'APIKey', fallback=default_config_sections['General']['APIKey'])),
-        'DUMMY_MODE': config.getboolean('General', 'DummyMode', fallback=default_config_sections['General']['DummyMode']),
-        'DUMMY_SCENARIO': config.get('General', 'DummyScenario', fallback=default_config_sections['General']['DummyScenario']),
-        'DUMMY_SPEED_MPS': config.getfloat('General', 'DummySpeedMps', fallback=default_config_sections['General']['DummySpeedMps']),
-        'DUMMY_ANGULAR_SPEED': config.getfloat('General', 'DummyAngularSpeed', fallback=default_config_sections['General']['DummyAngularSpeed']),
-        'DUMMY_RADIUS_M': config.getfloat('General', 'DummyRadiusM', fallback=default_config_sections['General']['DummyRadiusM']),
-        'LOG_LEVEL_STR': config.get('General', 'LogLevel', fallback=default_config_sections['General']['LogLevel']).upper(),
-        'CALCULATION_INTERVAL': config.getfloat('General', 'CalculationInterval', fallback=default_config_sections['General']['CalculationInterval']),
-        'CERT_PATH': config.get('General', 'CertPath', fallback=default_config_sections['General']['CertPath']),
-        'KEY_PATH': config.get('General', 'KeyPath', fallback=default_config_sections['General']['KeyPath']),
-
-        # GPS
-        'GPS_BASE_PORT': config.get('GPS', 'BasePort', fallback=default_config_sections['GPS']['BasePort']),
-        'GPS_ROVER_PORT': config.get('GPS', 'RoverPort', fallback=default_config_sections['GPS']['RoverPort']),
-        'BAUDRATE': config.getint('GPS', 'Baudrate', fallback=default_config_sections['GPS']['Baudrate']),
-        'GPS_READ_INTERVAL': config.getfloat('GPS', 'ReadInterval', fallback=default_config_sections['GPS']['ReadInterval']),
-        'SERIAL_RETRY_INTERVAL': config.getint('GPS', 'SerialRetryInterval', fallback=default_config_sections['GPS']['SerialRetryInterval']),
-        'BASELINE_LENGTH_METER': config.getfloat('GPS', 'BaselineLengthMeter', fallback=default_config_sections['GPS']['BaselineLengthMeter']),
-        'MAX_BASELINE_ERROR': config.getfloat('GPS', 'MaxBaselineError', fallback=default_config_sections['GPS']['MaxBaselineError']),
-        'HDOP_THRESHOLD': config.getfloat('GPS', 'HdopThreshold', fallback=default_config_sections['GPS']['HdopThreshold']),
-        'FIX_QUALITY_THRESHOLD': config.getint('GPS', 'FixQualityThreshold', fallback=default_config_sections['GPS']['FixQualityThreshold']),
-        'GPS_MAX_RETRY_COUNT': config.getint('GPS', 'MaxRetryCount', fallback=default_config_sections['GPS']['MaxRetryCount']),
-
-        # IMU
-        'MPU6050_I2C_BUS_NUM': int(config.get('IMU', 'MPU6050_I2C_BUS_NUM', fallback=default_config_sections['IMU']['MPU6050_I2C_BUS_NUM']), 0), # 0を付けると自動で基数を判別
-        'MPU6050_I2C_ADDR': int(config.get('IMU', 'MPU6050_I2C_ADDR', fallback=default_config_sections['IMU']['MPU6050_I2C_ADDR']), 0), # 0を付けると自動で基数を判別
-        'IMU_READ_INTERVAL': config.getfloat('IMU', 'ReadInterval', fallback=default_config_sections['IMU']['ReadInterval']),
-        'IMU_GYRO_Z_THRESHOLD': config.getfloat('IMU', 'GyroZThreshold', fallback=default_config_sections['IMU']['GyroZThreshold']),
-        'IMU_MAX_RETRY_COUNT': config.getint('IMU', 'MaxRetryCount', fallback=default_config_sections['IMU']['MaxRetryCount']),
-        'IMU_GYRO_BUFFER_SIZE': config.getint('IMU', 'GyroBufferSize', fallback=default_config_sections['IMU']['GyroBufferSize']),
-        'IMU_GYRO_OUTLIER_THRESHOLD': config.getfloat('IMU', 'GyroOutlierThreshold', fallback=default_config_sections['IMU']['GyroOutlierThreshold']),
-
-        # FUSION
-        'IMU_GPS_FUSION_ALPHA': config.getfloat('FUSION', 'ImuGpsFusionAlpha', fallback=default_config_sections['FUSION']['ImuGpsFusionAlpha'])
+    # 設定値の取得と型変換
+    # 環境変数からのAPIキー優先
+    return {
+        'API_KEY': os.environ.get('API_KEY', config['DEFAULT'].get('API_KEY', 'your_api_key_here')),
+        'GPS_BASE_PORT': config['DEFAULT'].get('GPS_BASE_PORT', '/dev/ttyUSB0'),
+        'GPS_ROVER_PORT': config['DEFAULT'].get('GPS_ROVER_PORT', '/dev/ttyUSB1'),
+        'BAUDRATE': int(config['DEFAULT'].get('BAUDRATE', '115200')),
+        'DUMMY_MODE': config['DEFAULT'].getboolean('DUMMY_MODE', False),
+        'LOG_LEVEL_STR': config['DEFAULT'].get('LOG_LEVEL', 'INFO').upper(),
+        'MPU6050_I2C_BUS_NUM': int(config['DEFAULT'].get('MPU6050_I2C_BUS_NUM', '1'), 0),
+        'MPU6050_I2C_ADDR': int(config['DEFAULT'].get('MPU6050_I2C_ADDR', '0x68'), 0),
+        'IMU_READ_INTERVAL': float(config['DEFAULT'].get('IMU_READ_INTERVAL', '0.02')),
+        'IMU_GYRO_OUTLIER_THRESHOLD': float(config['DEFAULT'].get('IMU_GYRO_OUTLIER_THRESHOLD', '3.0')),
+        'IMU_MAX_RETRY_COUNT': int(config['DEFAULT'].get('IMU_MAX_RETRY_COUNT', '5')),
+        'SERIAL_RETRY_INTERVAL': int(config['DEFAULT'].get('SERIAL_RETRY_INTERVAL', '5'))
     }
-    return app_config
 
-print("--- Loading config into APP_CONFIG ---") # 診断用print 4
 APP_CONFIG = load_config()
-print("--- Config loaded successfully into APP_CONFIG ---") # 診断用print 5
 
-# --- グローバル定数 (APP_CONFIGから値を設定) ---
+# --- ロギング設定 ---
+logging.basicConfig(level=getattr(logging, APP_CONFIG['LOG_LEVEL_STR'], logging.INFO),
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- グローバル定数 ---
+# 設定ファイルから取得した値を定数として定義
 API_KEY = APP_CONFIG['API_KEY']
 GPS_BASE_PORT = APP_CONFIG['GPS_BASE_PORT']
 GPS_ROVER_PORT = APP_CONFIG['GPS_ROVER_PORT']
@@ -149,35 +96,13 @@ IMU_READ_INTERVAL = APP_CONFIG['IMU_READ_INTERVAL']
 IMU_GYRO_OUTLIER_THRESHOLD = APP_CONFIG['IMU_GYRO_OUTLIER_THRESHOLD']
 IMU_MAX_RETRY_COUNT = APP_CONFIG['IMU_MAX_RETRY_COUNT']
 SERIAL_RETRY_INTERVAL = APP_CONFIG['SERIAL_RETRY_INTERVAL']
-HDOP_THRESHOLD = APP_CONFIG['HDOP_THRESHOLD'] # configから読み込む
-FIX_QUALITY_THRESHOLD = APP_CONFIG['FIX_QUALITY_THRESHOLD'] # configから読み込む
-CALCULATION_INTERVAL = APP_CONFIG['CALCULATION_INTERVAL'] # configから読み込む
-IMU_GPS_FUSION_ALPHA = APP_CONFIG['IMU_GPS_FUSION_ALPHA'] # configから読み込む
-GPS_READ_INTERVAL = APP_CONFIG['GPS_READ_INTERVAL'] # configから読み込む
-MAX_BASELINE_ERROR = APP_CONFIG['MAX_BASELINE_ERROR'] # configから読み込む
-IMU_GYRO_BUFFER_SIZE = APP_CONFIG['IMU_GYRO_BUFFER_SIZE'] # configから読み込む
 
-# その他の定数（config.iniで定義されていないが内部で利用するもの）
-HEADING_SMOOTHING_WINDOW = 5 # 方位角の移動平均ウィンドウサイズ (今回はconfig.iniに含めない)
-NMEA_BUFFER_SIZE = 100 # NMEA表示用バッファサイズ（行数） (今回はconfig.iniに含めない)
-
-# ダミーモードのシナリオ関連の定数もAPP_CONFIGから直接使用できるよう変更
-DUMMY_SCENARIO = APP_CONFIG['DUMMY_SCENARIO']
-DUMMY_SPEED_MPS = APP_CONFIG['DUMMY_SPEED_MPS']
-DUMMY_ANGULAR_SPEED = APP_CONFIG['DUMMY_ANGULAR_SPEED']
-DUMMY_RADIUS_M = APP_CONFIG['DUMMY_RADIUS_M']
-
-# SSL関連のパス
-CERT_PATH = APP_CONFIG['CERT_PATH']
-KEY_PATH = APP_CONFIG['KEY_PATH']
-
-# ロギング設定
-print("--- Initializing logging ---") # 診断用print 6
-logging.basicConfig(level=getattr(logging, APP_CONFIG['LOG_LEVEL_STR'], logging.INFO),
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-print("--- Logging initialized ---") # 診断用print 7
-
+# その他の定数
+MAX_CALIBRATION_SAMPLES = 500 # キャリブレーションサンプル数の上限
+IMU_GYRO_BUFFER_SIZE = 100 # ジャイロZ軸の移動平均計算用バッファサイズ
+HEADING_SMOOTHING_WINDOW = 5 # 方位角の移動平均ウィンドウサイズ
+HDOP_THRESHOLD = 2.0 # HDOPの閾値
+NMEA_BUFFER_SIZE = 100 # NMEA表示用バッファサイズ（行数）
 
 # グローバルイベント
 stop_event = threading.Event()
@@ -240,61 +165,28 @@ class SensorData:
             msg = pynmea2.parse(line)
             # GGAメッセージであることを確認
             if not isinstance(msg, pynmea2.types.talker.GGA):
-                logger.debug(f"NMEA: Not a GGA sentence - Line: '{line}'")
                 return None
             
             lat_deg = msg.latitude
             lon_deg = msg.longitude
             quality = msg.gps_qual
-            
-            hdop = 99.9 # Default to a high value
+            hdop = msg.hdop
 
-            # Try to get HDOP from attribute first, then fallback to raw data
-            try:
-                # Check if attribute exists and is not None/empty string
-                if hasattr(msg, 'hdop') and msg.hdop is not None and msg.hdop != '':
-                    hdop = float(msg.hdop)
-                else:
-                    # If attribute is missing or empty, try to parse manually from data list
-                    # GGA HDOP is field 8 (index 7)
-                    if len(msg.data) > 7 and msg.data[7] is not None and msg.data[7] != '':
-                        hdop = float(msg.data[7])
-                    else:
-                        # Log if the field is truly missing/empty
-                        logger.warning(f"NMEA parsing warning: HDOP field (index 7) is empty or missing in raw data: '{line}'")
-                        # hdop remains 99.9 (default)
-            except ValueError:
-                # Log if the value cannot be converted to float
-                logger.warning(f"NMEA parsing warning: HDOP value '{getattr(msg, 'hdop', 'N/A')}' (or msg.data[7]) is not a valid number - Line: '{line}'")
-                # hdop remains 99.9 (default)
-            except Exception as hdop_e:
-                # Catch any other unexpected errors during HDOP extraction
-                logger.warning(f"NMEA parsing warning: Unexpected error getting HDOP: {hdop_e} - Line: '{line}'")
-                # hdop remains 99.9 (default)
-
-            # --- Validation for lat/lon, hdop, quality ---
+            # 無効なデータ（0.0, 0.0など、またはNone/NaN）をチェック
             if abs(lat_deg) < 0.0001 and abs(lon_deg) < 0.0001:
-                logger.debug(f"NMEA: Invalid lat/lon (0.0, 0.0) detected - Line: '{line}'")
                 return None
-            
-            # Ensure quality is int. pynmea2 typically returns int but defensive.
-            if not isinstance(quality, int):
-                try:
-                    quality = int(quality)
-                except (ValueError, TypeError):
-                    logger.warning(f"NMEA parsing warning: GPS quality value is not a valid integer: '{quality}' - Line: '{line}'")
-                    quality = 0 # Default to unknown quality
-
+            if hdop is None: # HDOPがNoneの場合のデフォルト値
+                hdop = 99.9
 
             return {'lat': lat_deg, 'lon': lon_deg, 'hdop': hdop, 'quality': quality}
         except pynmea2.ParseError as e:
-            logger.debug(f"NMEA ParseError (Invalid format or non-GGA): {e} - Line: '{line}'")
+            logger.debug(f"NMEAパースエラー (GPGGA以外か不正フォーマット): {e} - Line: '{line}'")
             return None
-        except ValueError as e: # Catch value errors during float/int conversion for other fields
-            logger.warning(f"NMEA data conversion error: {e} - Line: '{line}'")
+        except ValueError as e: # float変換失敗など
+            logger.warning(f"NMEAデータ変換エラー: {e} - Line: '{line}'")
             return None
         except Exception as e:
-            logger.error(f"Unexpected NMEA parsing error: {e} - Line: '{line}'")
+            logger.error(f"予期せぬNMEA解析エラー: {e} - Line: '{line}'")
             return None
 
 
@@ -388,7 +280,8 @@ def initialize_imu_device(sensor_data: SensorData) -> bool:
         return False
 
     try:
-        sensor_data.imu_device = MPU6050(MPU6050_I2C_BUS_ADDR=MPU6050_I2C_BUS_NUM, MPU6050_I2C_ADDR=MPU6050_I2C_ADDR)
+        # 修正: MPU6050の初期化時にキーワード引数ではなく、位置引数を使用
+        sensor_data.imu_device = MPU6050(MPU6050_I2C_BUS_NUM, MPU6050_I2C_ADDR)
         
         # センサーが応答するか簡単な読み取りで確認
         accel_test = sensor_data.imu_device.get_accel_data()
@@ -419,59 +312,23 @@ def read_gps_thread(port: str, station_type: str):
         while not stop_event.is_set():
             current_time = time.monotonic()
             elapsed_time = current_time - start_time
-            
-            # ダミーシナリオのロジック
-            lat = 35.681236
-            lon = 139.767125
-            
-            if DUMMY_SCENARIO == 'linear':
-                # 線形移動 (北東方向へ)
-                dx = DUMMY_SPEED_MPS * elapsed_time * math.cos(math.radians(45)) # 約北東45度
-                dy = DUMMY_SPEED_MPS * elapsed_time * math.sin(math.radians(45))
-                # 緯度経度への変換 (簡易的)
-                lat_offset = dy / 111111 # 1度が約111km
-                lon_offset = dx / (111111 * math.cos(math.radians(lat)))
-
-                if station_type == 'base':
-                    lat += lat_offset
-                    lon += lon_offset
-                elif station_type == 'rover':
-                    lat += lat_offset + (math.sin(elapsed_time / 10) * 0.00001) # 少しずらす
-                    lon += lon_offset + (math.cos(elapsed_time / 10) * 0.00001) # 少しずらす
-            elif DUMMY_SCENARIO == 'circular':
-                # 円形移動
-                angle = DUMMY_ANGULAR_SPEED * elapsed_time # ラジアン
-                center_lat = 35.681236
-                center_lon = 139.767125
-                
-                # 中心からのオフセット
-                delta_lat = DUMMY_RADIUS_M * math.sin(angle) / 111111
-                delta_lon = DUMMY_RADIUS_M * math.cos(angle) / (111111 * math.cos(math.radians(center_lat)))
-                
-                if station_type == 'base':
-                    lat = center_lat + delta_lat
-                    lon = center_lon + delta_lon
-                elif station_type == 'rover':
-                    lat = center_lat + delta_lat + 0.00001 * math.sin(angle*5) # 小さな変動を追加
-                    lon = center_lon + delta_lon + 0.00001 * math.cos(angle*5) # 小さな変動を追加
-            else: # static
-                # 静止
-                if station_type == 'base':
-                    lat = 35.681236
-                    lon = 139.767125
-                elif station_type == 'rover':
-                    lat = 35.681236 + 0.00001 # 少しずらす
-                    lon = 139.767125 + 0.00001 # 少しずらす
-
-            hdop = 0.8 + math.sin(elapsed_time / 5) * 0.1
-            quality = 4 # RTK Fix
-            
+            # 少しずつ位置をずらすダミーデータ
+            if station_type == 'base':
+                lat = 35.681236 + math.sin(elapsed_time / 20) * 0.0001
+                lon = 139.767125 + math.cos(elapsed_time / 20) * 0.0001
+                hdop = 0.8 + math.sin(elapsed_time / 5) * 0.1
+                quality = 4 # RTK Fix
+            elif station_type == 'rover':
+                lat = 35.681236 + math.sin(elapsed_time / 20 + 0.00005) * 0.0001 + 0.00001 # 少しずらす
+                lon = 139.767125 + math.cos(elapsed_time / 20 + 0.00005) * 0.0001 + 0.00001 # 少しずらす
+                hdop = 0.9 + math.cos(elapsed_time / 5) * 0.1
+                quality = 4 # RTK Fix
             sensor_data.update_gps_data(station_type, lat, lon, hdop, quality)
             # ダミーNMEAデータを生成してバッファに追加
             dummy_nmea = f"$GPGGA,{time.strftime('%H%M%S.00', time.gmtime())},{lat:.7f},N,{lon:.7f},E,{quality},{random.randint(5,15)},{hdop:.1f},100.0,M,40.0,M,,*FF"
             with sensor_data.lock:
                 sensor_data.nmea_buffer.append(dummy_nmea)
-            time.sleep(GPS_READ_INTERVAL) # configから読み込んだGPS_READ_INTERVALを使用
+            time.sleep(0.5) # ダミーデータの更新間隔
         return
 
     while not stop_event.is_set():
@@ -497,7 +354,7 @@ def read_gps_thread(port: str, station_type: str):
                         parsed_data = sensor_data._parse_gga(line) # pynmea2を利用
                         if parsed_data:
                             sensor_data.update_gps_data(station_type, parsed_data['lat'], parsed_data['lon'], parsed_data['hdop'], parsed_data['quality'])
-                time.sleep(GPS_READ_INTERVAL) # configから読み込んだGPS_READ_INTERVALを使用
+                time.sleep(00.01) # 短いインターバルでCPU使用率を抑える
 
         except serial.SerialException as e:
             logger.error(f"シリアルポート {port} のエラー: {e}")
@@ -550,7 +407,7 @@ def read_imu_thread(sensor_data: SensorData):
             dummy_gyro_y = random.uniform(-5.0, 5.0)
             dummy_gyro_z = random.uniform(-2.0, 2.0)
             sensor_data.update_imu_data(dummy_accel_x, dummy_accel_y, dummy_accel_z, dummy_gyro_x, dummy_gyro_y, dummy_gyro_z)
-            time.sleep(IMU_READ_INTERVAL) # configから読み込んだIMU_READ_INTERVALを使用
+            time.sleep(IMU_READ_INTERVAL)
             continue
 
         with sensor_data.lock:
@@ -558,7 +415,7 @@ def read_imu_thread(sensor_data: SensorData):
 
         if not imu_device_initialized:
             current_time = time.monotonic()
-            if retry_count < IMU_MAX_RETRY_COUNT: # configから読み込んだIMU_MAX_RETRY_COUNTを使用
+            if retry_count < IMU_MAX_RETRY_COUNT:
                 if current_time - last_retry_attempt_time >= SERIAL_RETRY_INTERVAL:
                     logger.warning(f"IMUデバイスが初期化されていません。再初期化を試みます ({retry_count + 1}/{IMU_MAX_RETRY_COUNT})。")
                     if initialize_imu_device(sensor_data):
@@ -646,12 +503,12 @@ def calculate_heading_and_error_thread():
                     imu_predicted_heading = (sensor_data.last_fused_heading + integrated_heading_change + 360) % 360
 
                     # GPS方位とIMU方位の融合 (簡易的なカルマンフィルタ風)
-                    # GPS品質が良い場合 (FIX_QUALITY_THRESHOLD以上) かつHDOPが低い場合 (HDOP_THRESHOLD以下) はGPS方位を強く反映
-                    if sensor_data.base_data['quality'] >= FIX_QUALITY_THRESHOLD and sensor_data.rover_data['quality'] >= FIX_QUALITY_THRESHOLD and \
+                    # GPS品質が良い場合はGPS方位を強く反映
+                    if sensor_data.base_data['quality'] >= 4 and sensor_data.rover_data['quality'] >= 4 and \
                        sensor_data.base_data['hdop'] < HDOP_THRESHOLD and sensor_data.rover_data['hdop'] < HDOP_THRESHOLD:
                         # GPSとIMUの差を計算し、最短経路で補正（-180〜180度の範囲に正規化して計算）
                         diff = (gps_heading - imu_predicted_heading + 180 + 360) % 360 - 180
-                        alpha = IMU_GPS_FUSION_ALPHA # configから読み込んだIMU_GPS_FUSION_ALPHAを使用
+                        alpha = 0.8 # GPS信頼度 (0.0-1.0, 1.0に近いほどGPSを強く信用)
                         fused_heading = (imu_predicted_heading + alpha * diff + 360) % 360
                     else:
                         # GPS品質が低い場合はIMU予測値を重視
@@ -687,14 +544,13 @@ def calculate_heading_and_error_thread():
                     sensor_data.heading_fused = 0.0 # IMUもGPSも使えない場合は不定
 
             # --- 基線誤差の計算 ---
-            # ロジックは現状維持。configから読み込んだ値を使用。
-            if sensor_data.base_data['quality'] >= FIX_QUALITY_THRESHOLD and sensor_data.rover_data['quality'] >= FIX_QUALITY_THRESHOLD and \
-               sensor_data.base_data['hdop'] < HDOP_THRESHOLD and sensor_data.rover_data['hdop'] < HDOP_THRESHOLD:
-                # RTK Fix/Float based on quality and HDOP
-                # Adjusted based on MAX_BASELINE_ERROR from config, assuming it's a general multiplier
-                sensor_data.error = max(MAX_BASELINE_ERROR * 0.2, MAX_BASELINE_ERROR * 0.05 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
+            # ロジックは現状維持。実際の精度に合わせて調整してください。
+            if sensor_data.base_data['quality'] == 4 and sensor_data.rover_data['quality'] == 4: # RTK Fix
+                sensor_data.error = max(0.02, 0.005 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
+            elif sensor_data.base_data['quality'] == 5 and sensor_data.rover_data['quality'] == 5: # RTK Float
+                sensor_data.error = max(0.05, 0.02 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
             else: # Single or unknown
-                sensor_data.error = max(MAX_BASELINE_ERROR, MAX_BASELINE_ERROR * 0.5 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
+                sensor_data.error = max(0.5, 0.2 * (sensor_data.base_data['hdop'] + sensor_data.rover_data['hdop']))
             
             # グラフデータの更新
             # 現在の方位角のインデックスを更新
@@ -706,7 +562,7 @@ def calculate_heading_and_error_thread():
             normalized_gyro_z_for_graph = max(-99.0, min(-20.0, normalized_gyro_z_for_graph))
             sensor_data.graph_values[idx] = normalized_gyro_z_for_graph
             
-        time.sleep(CALCULATION_INTERVAL) # configから読み込んだCALCULATION_INTERVALを使用
+        time.sleep(0.05) # 計算スレッドの実行間隔
     logger.info("計算スレッドを停止します。")
 
 # --- APIエンドポイント ---
@@ -834,9 +690,8 @@ def run_app():
     threading.Thread(target=calculate_heading_and_error_thread, daemon=True).start()
 
     # Flaskアプリケーションの実行 (HTTPS対応)
-    # config.iniからパスを読み込む
-    cert_path = CERT_PATH
-    key_path = KEY_PATH
+    cert_path = os.path.join(os.path.dirname(__file__), 'cert.pem')
+    key_path = os.path.join(os.path.dirname(__file__), 'key.pem')
 
     if os.path.exists(cert_path) and os.path.exists(key_path):
         logger.info("SSL証明書と秘密鍵が見つかりました。HTTPSでサーバーを起動します。")

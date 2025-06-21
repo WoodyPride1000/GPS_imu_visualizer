@@ -48,6 +48,13 @@ function initMap() {
     const tokyoStationLon = 139.767125;
 
     console.log("initMap: Attempting to create L.map instance."); // 診断用ログ
+    // `#map` 要素が存在するか確認
+    const mapElement = document.getElementById('map');
+    if (!mapElement) {
+        console.error("initMap Error: Element with ID 'map' not found in the DOM.");
+        return; // 地図の初期化を中止
+    }
+
     map = L.map('map').setView([tokyoStationLat, tokyoStationLon], 18); // 初期位置とズームレベル
     console.log("initMap: L.map instance created."); // 診断用ログ
 
@@ -285,7 +292,8 @@ function updateFan(lat, lon, heading, angleWidth) {
     // angleWidth は扇形の中心から左右への角度 (例えば45°なら全体で90°)
     // Leaflet.GeometryUtil.destination を使用
 
-    const center = L.latLng(lat, lon);
+    // 変更: roverMarkerから直接LatLngを取得し、地図コンテキストを確保
+    const center = roverMarker.getLatLng(); // 修正点
     // 扇形の半径をメートル単位で指定 (例: 50メートル)
     const radiusMeters = 50; 
 
@@ -341,6 +349,7 @@ async function fetchSensorData() {
         const fanValue = parseFloat(document.getElementById('fanSlider').value);
         const headingFused = data.heading; // 融合方位角
         if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
+            // updateFan内でroverMarker.getLatLng()を使用するよう変更したため、引数は不要に
             updateFan(roverLat, roverLon, headingFused, fanValue);
         } else {
             console.warn("L.GeometryUtil.destination が利用できないため、扇形は描画されません。");
@@ -348,7 +357,8 @@ async function fetchSensorData() {
 
         // 算出した方位を示す線の更新 (画面サイズの30%の長さで表示 - 緑色破線)
         if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.destination) {
-            const baseLatLngForCalculatedLine = L.latLng(baseLat, baseLon);
+            // 変更: baseMarkerから直接LatLngを取得し、地図コンテキストを確保
+            const baseLatLngForCalculatedLine = baseMarker.getLatLng(); // 修正点
             const bounds = map.getBounds();
             const visibleHeightMeters = map.distance(bounds.getNorthWest(), L.latLng(bounds.getSouthWest().lat, bounds.getNorthWest().lng));
             const visibleWidthMeters = map.distance(bounds.getNorthWest(), bounds.getNorthEast());
@@ -404,14 +414,22 @@ async function fetchSensorData() {
         document.getElementById('dummyMode').textContent = data.dummy_mode ? 'ON' : 'OFF';
         document.getElementById('logLevel').textContent = data.log_level;
 
-        document.getElementById('status-message').textContent = ""; // エラーメッセージをクリア (成功時)
+        // ステータスメッセージをクリア
+        const statusMessageElement = document.getElementById('status-message');
+        if (statusMessageElement) {
+             statusMessageElement.textContent = ""; 
+        } else {
+             console.error("fetchSensorData: Element with ID 'status-message' not found.");
+        }
+
 
         // シンボルリストの情報を更新
         if (typeof L.GeometryUtil !== 'undefined' && L.GeometryUtil.distance && L.GeometryUtil.bearing) {
-            const baseLatLng = L.latLng(baseLat, baseLon);
+            // 変更: baseMarkerから直接LatLngを取得し、地図コンテキストを確保
+            const baseLatLng = baseMarker.getLatLng(); // 修正点
             customMarkers.forEach(symbol => {
                 const symbolLatLng = L.latLng(symbol.lat, symbol.lon);
-                const distanceToBase = L.GeometryUtil.distance(baseLatLng, symbolLatLng);
+                const distanceToBase = L.GeometryUtil.distance(baseLatLng, symbolLatLng); // この行がエラーの原因だった
                 const bearingToBase = L.GeometryUtil.bearing(baseLatLng, symbolLatLng);
 
                 document.getElementById(`dist-${symbol.id}`).textContent = distanceToBase.toFixed(3);
@@ -431,23 +449,38 @@ async function fetchSensorData() {
             message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
             color = 'red';
         } else if (error.message.includes("HTTPエラー: 404")) {
-            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            message = "APIエンドポイントが見つかりません (HTTP 404)。";
             color = 'red';
         } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
-            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+            message = "認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。";
             color = 'red';
         }
         
-        statusMessageElement.textContent = message;
-        statusMessageElement.style.color = color;
+        if (statusMessageElement) {
+            statusMessageElement.textContent = message;
+            statusMessageElement.style.color = color;
+        } else {
+            console.error("Error handler: Element with ID 'status-message' not found.");
+        }
 
         // エラー時は接続ステータスをNGにする
-        document.getElementById('baseConnected').querySelector('span').className = 'status-ng';
-        document.getElementById('baseConnected').querySelector('span').textContent = '切断';
-        document.getElementById('roverConnected').querySelector('span').className = 'status-ng';
-        document.getElementById('roverConnected').querySelector('span').textContent = '切断';
-        document.getElementById('imuStatus').className = 'status-ng';
-        document.getElementById('imuStatus').textContent = 'OFF';
+        // ここでも要素の存在チェックを追加
+        const baseConnectedSpan = document.getElementById('baseConnected')?.querySelector('span');
+        const roverConnectedSpan = document.getElementById('roverConnected')?.querySelector('span');
+        const imuStatusElement = document.getElementById('imuStatus');
+
+        if (baseConnectedSpan) {
+            baseConnectedSpan.className = 'status-ng';
+            baseConnectedSpan.textContent = '切断';
+        }
+        if (roverConnectedSpan) {
+            roverConnectedSpan.className = 'status-ng';
+            roverConnectedSpan.textContent = '切断';
+        }
+        if (imuStatusElement) {
+            imuStatusElement.className = 'status-ng';
+            imuStatusElement.textContent = 'OFF';
+        }
     }
 }
 
@@ -494,15 +527,19 @@ async function fetchGraphData() {
             message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
             color = 'red';
         } else if (error.message.includes("HTTPエラー: 404")) {
-            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            message = "APIエンドポイントが見つかりません (HTTP 404)。";
             color = 'red';
         } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
-            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+            message = "認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。";
             color = 'red';
         }
 
-        statusMessageElement.textContent = message;
-        statusMessageElement.style.color = color;
+        if (statusMessageElement) {
+            statusMessageElement.textContent = message;
+            statusMessageElement.style.color = color;
+        } else {
+            console.error("fetchGraphData: Element with ID 'status-message' not found.");
+        }
     }
 }
 
@@ -530,7 +567,6 @@ async function fetchNMEAData() {
         nmeaOutput.scrollTop = nmeaOutput.scrollHeight; // 最下部にスクロール
     } catch (error) {
         console.error("NMEAデータの取得中にエラー:", error);
-        // NMEAデータ取得エラーの場合もステータスメッセージを更新
         const statusMessageElement = document.getElementById('status-message');
         let message = `NMEAデータの取得中にエラー: ${error.message}`;
         let color = 'orange';
@@ -539,15 +575,19 @@ async function fetchNMEAData() {
             message = `サーバーに接続できません。バックエンドが実行中か、ネットワーク接続を確認してください。`;
             color = 'red';
         } else if (error.message.includes("HTTPエラー: 404")) {
-            message = `APIエンドポイントが見つかりません (HTTP 404)。バックエンドサーバーが正しく起動しており、ルートが定義されているか確認してください。`;
+            message = "APIエンドポイントが見つかりません (HTTP 404)。";
             color = 'red';
-        } else if (error.message.includes("認証エラー") || error.message.includes("HTTPエラー: 401")) {
-            message = `認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。`;
+        } else if (error.message.includes("認証エラー") || error.message.includes("HTTP_401")) {
+            message = "認証エラー (HTTP 401): APIキーが不正です。index.htmlとconfig.iniのAPI_KEYが一致しているか確認してください。";
             color = 'red';
         }
 
-        statusMessageElement.textContent = message;
-        statusMessageElement.style.color = color;
+        if (statusMessageElement) {
+            statusMessageElement.textContent = message;
+            statusMessageElement.style.color = color;
+        } else {
+            console.error("fetchNMEAData: Element with ID 'status-message' not found.");
+        }
     }
 }
 
@@ -557,6 +597,13 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log("DOMContentLoaded: Event fired. Calling initMap()."); // 診断用ログ
     initMap();
     console.log("DOMContentLoaded: initMap() called. Initializing charts and intervals."); // 診断用ログ
+    
+    // #map要素が取得できなかった場合は、以降の処理は行わない
+    if (!map) {
+        console.error("Map initialization failed. Skipping further UI/data setup.");
+        return;
+    }
+
     initChart(); // Chart.jsの初期化
     setInterval(fetchSensorData, 2000); // 2秒ごとにデータ更新
     setInterval(fetchGraphData, 5000); // 5秒ごとにグラフデータ更新 (変更なし)
@@ -569,7 +616,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // グリッド線表示チェックボックス
     document.getElementById('gridCheckbox').addEventListener('change', (e) => {
-        if (e.target.checked) {
+        if (document.getElementById('gridCheckbox').checked) {
             updateGrid(map.getBounds());
         } else {
             gridLayer.clearLayers();
@@ -617,15 +664,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(errorMessage);
             }
             const result = await response.json();
-            document.getElementById('status-message').textContent = `キャリブレーション: ${result.status}`;
-            if (result.offset !== undefined) {
-                document.getElementById('status-message').textContent += ` オフセット: ${result.offset.toFixed(5)}`;
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = `キャリブレーション: ${result.status}`;
+                if (result.offset !== undefined) {
+                    statusMessageElement.textContent += ` オフセット: ${result.offset.toFixed(5)}`;
+                }
+                statusMessageElement.style.color = 'blue';
+            } else {
+                console.error("calibrateButton: Element with ID 'status-message' not found.");
             }
-            document.getElementById('status-message').style.color = 'blue';
         } catch (error) {
             console.error("キャリブレーションAPIエラー:", error);
-            document.getElementById('status-message').textContent = `キャリブレーションエラー: ${error.message}`;
-            document.getElementById('status-message').style.color = 'red';
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = `キャリブレーションエラー: ${error.message}`;
+                statusMessageElement.style.color = 'red';
+            } else {
+                console.error("calibrateButton error handler: Element with ID 'status-message' not found.");
+            }
             // エラー時は元の状態に戻す
             if (action === 'start') {
                 button.classList.remove('calibrating');
@@ -661,12 +718,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(errorMessage);
             }
             const result = await response.json();
-            document.getElementById('status-message').textContent = `ログレベル設定: ${result.status}`;
-            document.getElementById('status-message').style.color = 'blue';
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = `ログレベル設定: ${result.status}`;
+                statusMessageElement.style.color = 'blue';
+            } else {
+                console.error("setLogLevelButton: Element with ID 'status-message' not found.");
+            }
         } catch (error) {
             console.error("ログレベル設定APIエラー:", error);
-            document.getElementById('status-message').textContent = `ログレベル設定エラー: ${error.message}`;
-            document.getElementById('status-message').style.color = 'red';
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = `ログレベル設定エラー: ${error.message}`;
+                statusMessageElement.style.color = 'red';
+            } else {
+                console.error("setLogLevelButton error handler: Element with ID 'status-message' not found.");
+            }
         }
     });
 
@@ -682,15 +749,22 @@ document.addEventListener('DOMContentLoaded', () => {
         showNMEA = !showNMEA;
         const nmeaContainer = document.getElementById('nmea-container');
         console.log(`NMEA Toggle: showNMEA=${showNMEA}`); // 診断用ログ
-        if (showNMEA) {
-            nmeaContainer.style.display = 'flex';
-            console.log("NMEA Toggle: Setting display to 'flex'."); // 診断用ログ
-            fetchNMEAData(); // 表示開始時に一度データを取得
+        
+        // nmeaContainerが存在するか確認するログ
+        if (nmeaContainer) {
+            console.log("NMEA Toggle: nmeaContainer element found.");
+            if (showNMEA) {
+                nmeaContainer.style.display = 'flex';
+                console.log("NMEA Toggle: Setting display to 'flex'."); // 診断用ログ
+                fetchNMEAData(); // 表示開始時に一度データを取得
+            } else {
+                nmeaContainer.style.display = 'none';
+                console.log("NMEA Toggle: Setting display to 'none'."); // 診断用ログ
+            }
+            console.log("NMEA Toggle: NMEA container display is now:", nmeaContainer.style.display); // 診断用ログ
         } else {
-            nmeaContainer.style.display = 'none';
-            console.log("NMEA Toggle: Setting display to 'none'."); // 診断用ログ
+            console.error("NMEA Toggle Error: Element with ID 'nmea-container' not found in the DOM.");
         }
-        console.log("NMEA Toggle: NMEA container display is now:", nmeaContainer.style.display); // 診断用ログ
     });
 
     // シンボル配置ボタン
@@ -700,15 +774,25 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isPlacingSymbol) {
             button.classList.add('active');
             button.textContent = 'シンボル配置停止';
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = "シンボル配置モード: ON - 地図をクリックして配置";
+                statusMessageElement.style.color = 'green';
+            } else {
+                console.error("placeSymbolButton: Element with ID 'status-message' not found.");
+            }
             map.getContainer().style.cursor = 'crosshair'; // マップカーソルを十字に変更
-            document.getElementById('status-message').textContent = "シンボル配置モード: ON - 地図をクリックして配置";
-            document.getElementById('status-message').style.color = 'green';
         } else {
             button.classList.remove('active');
             button.textContent = 'シンボル配置';
+            const statusMessageElement = document.getElementById('status-message');
+            if (statusMessageElement) {
+                statusMessageElement.textContent = "シンボル配置モード: OFF";
+                statusMessageElement.style.color = 'blue';
+            } else {
+                console.error("placeSymbolButton: Element with ID 'status-message' not found.");
+            }
             map.getContainer().style.cursor = 'grab'; // マップカーソルをデフォルトに戻す
-            document.getElementById('status-message').textContent = "シンボル配置モード: OFF";
-            document.getElementById('status-message').style.color = 'blue';
         }
     });
 });
